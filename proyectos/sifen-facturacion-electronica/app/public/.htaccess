@@ -1,0 +1,22 @@
+# ============================================================
+# app/public/.htaccess — punto de entrada público del sistema
+# Lo ideal en cPanel es apuntar el "Document Root" del dominio a
+# .../app/public. Este archivo refuerza la seguridad básica.
+# ============================================================
+
+# Evitar el listado de directorios.
+Options -Indexes
+
+# index.php es el único punto de entrada (maneja todo por parámetros GET/POST).
+DirectoryIndex index.php
+
+# Por las dudas, negar acceso a archivos sensibles que NO deberían estar acá.
+<FilesMatch "\.(env|sql|ini|log|md|sh|bat)$">
+  Require all denied
+</FilesMatch>
+
+# Cabeceras de seguridad (si el módulo está disponible).
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+</IfModule>

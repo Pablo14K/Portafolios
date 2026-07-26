@@ -1,0 +1,27 @@
+# Archivo de ejemplo para el automatizador SIFEN.
+# Podés poner una o varias facturas. Separá cada factura con una línea:  ===
+# Las líneas que empiezan con # son comentarios y se ignoran.
+#
+# FAC|establecimiento|punto|numero|fecha|condicion|moneda
+# CLI|tipo|documento|nombre|email|direccion|telefono
+# ITM|codigo|descripcion|cantidad|precio_unitario|iva
+# PAG|tipo|monto
+#
+# condicion: 1=contado, 2=credito   |   iva: 10, 5 o 0 (0=exenta)
+# cliente tipo: RUC (documento=80012345-6) o CI (documento=nro o CF)
+# pago tipo: 1=efectivo 2=cheque 3=tarj.credito 4=tarj.debito 5=transferencia
+
+# ---- Factura 1: cliente con RUC, contado ----
+FAC|001|001|0000123|2026-06-21|1|PYG
+CLI|RUC|80012345-6|Comercial Cliente S.A.|cliente@correo.com|Avda. Siempre Viva 742|021555444
+ITM|P001|Teclado mecanico|2|150000|10
+ITM|P002|Mouse inalambrico|1|90000|10
+ITM|S001|Servicio de instalacion|1|50000|10
+
+===
+
+# ---- Factura 2: consumidor final, sin pagos (se asume efectivo) ----
+FAC|001|001|0000124|2026-06-21|1|PYG
+CLI|CI|CF|Consumidor Final|||
+ITM|L001|Libro de SIFEN|1|80000|10
+ITM|L002|Cuaderno (exento)|3|12000|0

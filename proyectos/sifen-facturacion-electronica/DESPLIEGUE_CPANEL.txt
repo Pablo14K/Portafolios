@@ -1,0 +1,242 @@
+╔══════════════════════════════════════════════════════════════════╗
+║   SIFEN v150 — DESPLIEGUE EN cPanel CON SUBDOMINIO (100% PHP)       ║
+║   Paso a paso exacto + qué tener en cuenta                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+El sistema es íntegramente PHP. NO requiere Node.js, NI procesos en
+segundo plano permanentes, NI acceso SSH. Funciona con el Apache + PHP
+estándar de cualquier hosting cPanel.
+
+Ejemplo usado en esta guía:
+   • Dominio principal:   tudominio.com
+   • Subdominio nuevo:    facturacion.tudominio.com
+   • Usuario cPanel:      tucuenta
+   • Carpeta del proyecto (fuera de la web):  /home/tucuenta/sifen
+
+
+┌──────────────────────────────────────────────────────────────────┐
+│ RESUMEN EN 8 PASOS (detalle abajo)                                 │
+│   1. Crear el subdominio                                           │
+│   2. Subir el proyecto (fuera de public_html)                      │
+│   3. Apuntar el Document Root del subdominio a  app/public         │
+│   4. Elegir versión de PHP + extensiones                           │
+│   5. Crear la base de datos e importar el .sql                     │
+│   6. Configurar el archivo .env                                    │
+│   7. Permisos de la carpeta storage/                               │
+│   8. Probar en el navegador                                        │
+└──────────────────────────────────────────────────────────────────┘
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 1 — CREAR EL SUBDOMINIO
+══════════════════════════════════════════════════════════════════
+  cPanel → "Dominios" (o "Subdominios", según la versión de cPanel).
+    • Subdominio:  facturacion
+    • Dominio:     tudominio.com
+    • Document Root: por defecto cPanel propone
+                    /home/tucuenta/public_html/facturacion
+      → DEJALO ASÍ por ahora; lo cambiamos en el PASO 3 a app/public.
+
+  Resultado: queda accesible https://facturacion.tudominio.com
+  (el certificado SSL gratuito AutoSSL suele emitirse solo en unos
+   minutos; si no, cPanel → "SSL/TLS Status" → "Run AutoSSL").
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 2 — SUBIR EL PROYECTO (fuera de public_html — recomendado)
+══════════════════════════════════════════════════════════════════
+  Por seguridad, el código NO debe quedar accesible desde la web; solo
+  la carpeta app/public. Por eso conviene subir el proyecto a una
+  carpeta privada y luego apuntar el subdominio a app/public.
+
+  a) cPanel → "Administrador de archivos".
+  b) Pará en  /home/tucuenta/  y creá la carpeta  sifen.
+  c) Subí ahí el proyecto. Lo más cómodo:
+       • Comprimí el proyecto local en un .zip
+         (carpetas app/, db/, storage/ + .env + .htaccess).
+       • Subí el .zip a /home/tucuenta/sifen/ y "Extraer".
+  d) Debe quedar así:
+       /home/tucuenta/sifen/
+         ├── app/            (bootstrap.php, config/, public/, scripts/, src/)
+         ├── db/             (init/base_de_datos_completa.sql)
+         ├── storage/        (xml, kude, emails, logs, certs)
+         ├── .env
+         └── .htaccess
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • NO subas node_modules ni nada de Node: ya no existe.
+     • NO subas la carpeta .git si la tenés.
+     • Si tu plan no te deja crear carpetas fuera de public_html, usá
+       la VARIANTE B del PASO 3.
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 3 — APUNTAR EL DOCUMENT ROOT DEL SUBDOMINIO A  app/public
+══════════════════════════════════════════════════════════════════
+  Esta es la parte clave del despliegue con subdominio.
+
+  VARIANTE A (recomendada — proyecto fuera de public_html):
+    cPanel → "Dominios" → al lado de  facturacion.tudominio.com  →
+    "Administrar" → campo "Document Root" → cambialo a:
+            /home/tucuenta/sifen/app/public
+    Guardá. Listo: el subdominio sirve directamente app/public y el
+    resto (código, .env, storage, db) queda FUERA del alcance web.
+    En este caso el .htaccess de la raíz NI se usa (no hace falta).
+
+  VARIANTE B (si NO podés cambiar el Document Root):
+    Subí TODO el proyecto dentro de la carpeta del subdominio
+    (ej.  /home/tucuenta/public_html/facturacion/ ) dejando el
+    .htaccess de la raíz del proyecto en esa carpeta. Ese .htaccess ya:
+       (1) bloquea el acceso directo a .env, app/src, db y storage, y
+       (2) enruta TODAS las peticiones hacia app/public/ (front controller).
+    Requiere que el hosting tenga mod_rewrite activo (lo normal en cPanel).
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • Después de cambiar el Document Root puede tardar 1-2 minutos en
+       tomar efecto. Si ves el "índice por defecto" de cPanel, esperá
+       o limpiá caché del navegador.
+     • Verificá que NO se pueda abrir  https://facturacion.tudominio.com/.env
+       (debe dar 403/404). Si se descarga, revisá el .htaccess o el docroot.
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 4 — VERSIÓN Y EXTENSIONES DE PHP
+══════════════════════════════════════════════════════════════════
+  cPanel → "Select PHP Version" (o "MultiPHP Manager"):
+    • Versión:  PHP 8.1 o superior.
+    • Extensiones que deben estar TILDADAS:
+          pdo_mysql   (conexión a la base)
+          mbstring    (texto/UTF-8 del KuDE y del XML)
+          openssl     (firma digital, SMTP con TLS)
+          curl        (cliente SOAP a SIFEN cuando haya certificado)
+          dom         (manejo del XML)
+          fileinfo    (adjuntos de correo)
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • Si el subdominio usa una versión de PHP distinta del dominio
+       principal, configurala en "MultiPHP Manager" para ese subdominio.
+     • Subí "max_execution_time" a 120 y "memory_limit" a 256M si vas a
+       enviar muchos comprobantes seguidos (Options de PHP en cPanel).
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 5 — BASE DE DATOS (crear + importar)
+══════════════════════════════════════════════════════════════════
+  a) cPanel → "MySQL Databases":
+       • Creá una base, ej.  tucuenta_sifen
+       • Creá un usuario, ej.  tucuenta_sifuser  con una contraseña fuerte.
+       • "Add User To Database" → asignale el usuario a la base con
+         ALL PRIVILEGES.
+       • Anotá los nombres COMPLETOS (cPanel les antepone "tucuenta_").
+
+  b) cPanel → "phpMyAdmin" → seleccioná la base  tucuenta_sifen  →
+     pestaña "Importar" → elegí  db/init/base_de_datos_completa.sql  →
+     "Continuar". Debe crear ~14 tablas, triggers y los datos seed
+     (incluye una fila en emitter_settings).
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • El sistema crea/ajusta columnas que falten al primer arranque
+       (SchemaUpgrader). Igual conviene importar el .sql completo primero.
+     • Editá la fila #1 de la tabla  emitter_settings  con los datos
+       reales de la empresa (RUC, DV, razón social, timbrado, dirección,
+       id_csc, csc). Se puede hacer desde phpMyAdmin.
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 6 — CONFIGURAR EL ARCHIVO .env
+══════════════════════════════════════════════════════════════════
+  Editá  /home/tucuenta/sifen/.env  (Administrador de archivos → Editar).
+  Mínimo a completar:
+
+    # Base de datos (los nombres llevan el prefijo del usuario cPanel)
+    DB_HOST=localhost
+    DB_PORT=3306
+    DB_NAME=tucuenta_sifen
+    DB_USER=tucuenta_sifuser
+    DB_PASS=la_contraseña_que_pusiste
+
+    # Modo SIFEN (sin certificado todavía => mock)
+    SIFEN_MODE=mock
+
+    # Correo (cuenta SMTP del propio cPanel o un Gmail con app password)
+    MAIL_HOST=mail.tudominio.com
+    MAIL_PORT=587
+    MAIL_USERNAME=facturas@tudominio.com
+    MAIL_PASSWORD=...
+    MAIL_FROM_EMAIL=facturas@tudominio.com
+    MAIL_FROM_NAME=Facturación Electrónica
+    MAIL_ENCRYPTION=tls
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • En cPanel el host de MySQL casi siempre es "localhost".
+     • Para correo con la propia cuenta del hosting: creá la casilla en
+       cPanel → "Cuentas de correo electrónico", y usá host
+       mail.tudominio.com, puerto 587 (TLS) o 465 (SSL).
+     • Si usás Gmail: MAIL_HOST=smtp.gmail.com, puerto 587, y generá una
+       "contraseña de aplicación" (no tu contraseña normal).
+     • Si dejás MAIL_USERNAME vacío, el sistema NO envía: guarda el .eml
+       en storage/emails/ (útil para probar sin mandar correos reales).
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 7 — PERMISOS DE storage/
+══════════════════════════════════════════════════════════════════
+  La carpeta storage/ y sus subcarpetas (xml, kude, emails, logs, certs)
+  deben ser ESCRIBIBLES por PHP.
+    • Normalmente con 755 alcanza.
+    • Si el XML o el KuDE no se generan, probá 775 en storage/ y en sus
+      subcarpetas (Administrador de archivos → clic derecho → Permisos).
+
+  ⚠ QUÉ TENER EN CUENTA:
+     • Las rutas de storage se anclan automáticamente a la raíz del
+       proyecto (APP_ROOT), así que funcionan sin importar dónde quede
+       el proyecto ni el directorio de trabajo. No hay que tocar rutas.
+
+
+══════════════════════════════════════════════════════════════════
+ PASO 8 — PROBAR
+══════════════════════════════════════════════════════════════════
+  a) Abrí  https://facturacion.tudominio.com  → debe cargar la interfaz.
+  b) (Opcional) Diagnóstico: subí/abrí  verificar_servidor.php  para
+     chequear PHP, extensiones, conexión a BD y permisos de storage.
+     IMPORTANTE: borralo o renómbralo después de usarlo (expone datos).
+  c) Cargá una factura y marcala PAGADO.
+  d) Pestaña "📤 Envío" → "Enviar comprobantes": se generan y envían
+     UNO POR UNO, en orden, al correo de cada cliente.
+       • Si se corta internet, el envío queda SUSPENDIDO; cuando vuelve,
+         presionás "Reanudar" y sigue desde donde quedó, sin duplicar.
+
+
+══════════════════════════════════════════════════════════════════
+ (OPCIONAL) CRON DE GENERACIÓN
+══════════════════════════════════════════════════════════════════
+  El envío es manual por diseño (botón). Si querés que la GENERACIÓN de
+  comprobantes de facturas ya pagadas se adelante sola, cPanel →
+  "Cron Jobs":
+        /usr/local/bin/php /home/tucuenta/sifen/app/scripts/process_fe_queue.php
+  Ajustá la ruta de "php" según tu hosting (a veces es
+  /opt/cpanel/ea-php81/root/usr/bin/php). Esto NO envía correos.
+
+
+══════════════════════════════════════════════════════════════════
+ CHECKLIST RÁPIDO DE PROBLEMAS
+══════════════════════════════════════════════════════════════════
+  • Pantalla en blanco / error 500:
+      → revisá la versión de PHP (8.1+) y que estén las extensiones.
+      → mirá el "Error Log" de cPanel.
+  • "Could not connect" a la base:
+      → DB_NAME/DB_USER deben llevar el prefijo "tucuenta_"; host=localhost.
+  • El .env se descarga al abrirlo en el navegador:
+      → el Document Root no apunta a app/public, o falta el .htaccess.
+  • El KuDE/XML no se genera:
+      → permisos de storage/ (probá 775) y que exista la carpeta.
+  • El correo no sale:
+      → credenciales MAIL_*; probá puerto 465 con MAIL_ENCRYPTION=ssl.
+  • KuDE con muchos ítems: ahora se pagina solo (varias hojas "X/Y";
+    totales en la última, zona QR/CDC al pie de todas). Los KuDE
+    viejos NO se regeneran.
+
+──────────────────────────────────────────────────────────────────
+ Ver también:  LEER_PRIMERO.txt  (uso general y arquitectura)
+                Documento/DOCUMENTACION_TECNICA_COMPLETA.docx (detalle técnico)
+──────────────────────────────────────────────────────────────────

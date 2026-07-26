@@ -1,0 +1,49 @@
+# ==================================================================
+# ARCHIVO DE PRUEBA — Automatizador SIFEN (modo mock, sin valor fiscal)
+# Formato: campos separados por | (pipe).  # = comentario.  === separa facturas.
+#
+# El PAGO es AUTOMATICO: no se escribe nada. El sistema asigna efectivo por el
+# total (calculado desde los items). Por eso el .txt es solo FAC + CLI + ITM.
+#
+# Cambia  rjaime1@columbia.edu.py  por tu correo real para recibir PDF + XML.
+# ==================================================================
+
+# ---- Factura 1: RUC + correo (pago efectivo automatico = total 390.000) ----
+FAC|001|001|0000123|2026-06-24|1|PYG
+CLI|RUC|80012345-6|Comercial Ejemplo S.A.|rjaime1@columbia.edu.py|Avda. Mariscal Lopez 1234|021555444
+ITM|P001|Teclado mecanico retroiluminado|2|150000|10
+ITM|P002|Mouse inalambrico|1|90000|10
+===
+
+# ---- Factura 2: servicio (pago automatico = total 400.000) ----
+FAC|001|001|0000124|2026-06-24|1|PYG
+CLI|RUC|80012345-6|Comercial Ejemplo S.A.|rjaime1@columbia.edu.py||
+ITM|S001|Servicio mensual de soporte|1|400000|10
+===
+
+# ---- Factura 3: MUCHOS items para forzar la PAGINACION automatica del KuDE ----
+FAC|001|001|0000125|2026-06-24|1|PYG
+CLI|RUC|80012345-6|Distribuidora Mayorista S.A.|rjaime1@columbia.edu.py|Ruta 2 Km 15|021777888
+ITM|A001|Resma papel A4 75g|5|35000|10
+ITM|A002|Boligrafo azul caja x50|3|45000|10
+ITM|A003|Cuaderno tapa dura 100h|10|12000|10
+ITM|A004|Marcador permanente negro|12|6000|10
+ITM|A005|Corrector liquido|8|7500|10
+ITM|A006|Tijera metalica 21cm|6|18000|10
+ITM|A007|Engrapadora metalica|4|55000|10
+ITM|A008|Caja de clips x100|20|3500|10
+ITM|A009|Cinta adhesiva transparente|15|4500|10
+ITM|A010|Carpeta colgante oficio|25|3000|10
+ITM|A011|Folio plastico A4 x100|7|22000|10
+ITM|A012|Resaltador pastel x6|9|28000|10
+ITM|A013|Pegamento en barra 40g|14|9000|10
+ITM|A014|Calculadora cientifica|3|95000|10
+ITM|A015|Perforadora 2 huecos|5|48000|10
+ITM|A016|Tinta para sello negra|6|15000|10
+===
+
+# ---- Factura 4: CONSUMIDOR FINAL, sin correo (pago efectivo automatico = 130.000) ----
+FAC|001|001|0000126|2026-06-24|1|PYG
+CLI|CI|CF|Consumidor Final|||
+ITM|L001|Libro de cuentos infantil|1|80000|10
+ITM|L002|Lapices de colores x24|2|25000|10

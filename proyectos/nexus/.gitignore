@@ -1,0 +1,19 @@
+# Artefactos de compilación
+build/
+app/build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+
+# Configuración local y credenciales (usa local.properties.example como plantilla)
+local.properties
+
+# Firma
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.DS_Store

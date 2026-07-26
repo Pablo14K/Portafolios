@@ -1,0 +1,17 @@
+# Configuración con credenciales (usar .env.example como base)
+/.env
+/config/automatizador.php
+
+# Datos de trabajo (no versionar comprobantes ni archivos de clientes)
+/entrada/*
+/procesados/*
+/errores/*
+/salida/*
+/logs/*
+
+# pero mantener las carpetas en el repo
+!/entrada/.gitkeep
+!/procesados/.gitkeep
+!/errores/.gitkeep
+!/salida/.gitkeep
+!/logs/.gitkeep

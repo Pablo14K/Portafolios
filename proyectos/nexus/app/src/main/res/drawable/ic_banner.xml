@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Banner de Android TV: 320x180. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:pathData="M0,0 h320 v180 h-320 z"
+        android:fillColor="#000000" />
+    <path
+        android:pathData="M28,62 h56 v56 h-56 z"
+        android:strokeColor="#00FF2C"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M47,78 L70,90 L47,102 z"
+        android:fillColor="#00FF2C" />
+    <path
+        android:pathData="M108,84 h184 v3 h-184 z"
+        android:fillColor="#00FF2C"
+        android:fillAlpha="0.35" />
+    <path
+        android:pathData="M108,96 h96 v3 h-96 z"
+        android:fillColor="#00FF2C"
+        android:fillAlpha="0.15" />
+</vector>

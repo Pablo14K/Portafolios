@@ -1,0 +1,41 @@
+# Dependencias
+node_modules/
+vendor/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Credenciales y configuración local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.*
+
+# Builds y artefactos
+dist/
+build/
+out/
+target/
+*.log
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Android
+local.properties
+*.jks
+*.keystore
+.gradle/
+app/build/
+
+# CV: datos personales y exportaciones (no van al repo público)
+cv/datos-contacto.md
+cv/build/

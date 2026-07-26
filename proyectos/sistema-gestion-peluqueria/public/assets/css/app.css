@@ -1,0 +1,142 @@
+/* =====================================================================
+   SPG — Identidad visual
+   Neutros cálidos + acento oro champagne. El oro solo en acción/jerarquía.
+   ===================================================================== */
+:root{
+  --negro:#0D0D0D;
+  --carbon:#1A1A1A;
+  --gris-oscuro:#555555;
+  --gris-calido:#E0DDD8;
+  --blanco-hueso:#F7F5F2;
+  --blanco:#FFFFFF;
+  --oro:#C9A84C;
+  --oro-claro:#E8CC80;
+  --oro-oscuro:#8A6C1E;
+  --rojo:#993535;
+  --radius:12px;
+}
+
+*{box-sizing:border-box;}
+body{
+  background:var(--blanco-hueso);
+  color:var(--carbon);
+  font-family:-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;
+  min-height:100vh;
+}
+
+/* ---- Barra superior ---- */
+.spg-topbar{
+  background:var(--negro);
+  padding:.7rem 1.4rem;
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:1030;
+}
+.spg-brand{display:flex;align-items:center;gap:.7rem;text-decoration:none;}
+.spg-logo{
+  width:34px;height:34px;border-radius:9px;background:var(--oro);
+  display:flex;align-items:center;justify-content:center;color:var(--negro);font-size:1.2rem;
+}
+.spg-brand-name{color:var(--oro);font-size:1.05rem;font-weight:500;letter-spacing:.3px;}
+.spg-topbar .spg-user{color:var(--gris-calido);font-size:.85rem;display:flex;align-items:center;gap:.9rem;}
+.spg-topbar a.spg-user-link{color:var(--gris-calido);text-decoration:none;}
+.spg-topbar a.spg-user-link:hover{color:var(--oro-claro);}
+.spg-rol-chip{background:var(--oro);color:var(--negro);font-size:.72rem;font-weight:500;padding:.12rem .6rem;border-radius:20px;}
+
+/* ---- Migas / encabezado de página ---- */
+.spg-page-head{padding:1.3rem 0 .3rem;}
+.spg-page-head h1{font-size:1.3rem;font-weight:500;margin:0;}
+.spg-page-head .sub{font-size:.85rem;color:var(--gris-oscuro);margin-top:.15rem;}
+.spg-back{color:var(--oro-oscuro);text-decoration:none;font-size:.85rem;}
+.spg-back:hover{text-decoration:underline;}
+
+/* ---- Grilla de tarjetas de módulos ---- */
+.spg-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;padding:.6rem 0 2rem;}
+.spg-card{
+  background:var(--blanco);border:1px solid var(--gris-calido);border-radius:var(--radius);
+  padding:1.1rem;text-decoration:none;color:var(--carbon);display:block;transition:border-color .15s,transform .15s;
+}
+.spg-card:hover{border-color:var(--oro);transform:translateY(-2px);}
+.spg-card .ic{
+  width:42px;height:42px;border-radius:10px;background:var(--blanco-hueso);
+  display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:var(--gris-oscuro);
+}
+.spg-card:hover .ic{color:var(--oro-oscuro);}
+.spg-card h3{font-size:1rem;font-weight:500;margin:.8rem 0 .35rem;}
+.spg-card p{font-size:.78rem;color:var(--gris-oscuro);margin:0;line-height:1.5;}
+.spg-card.dark{background:var(--carbon);border-color:var(--carbon);}
+.spg-card.dark .ic{background:var(--negro);color:var(--oro);}
+.spg-card.dark h3{color:var(--blanco-hueso);}
+.spg-card.dark p{color:var(--gris-calido);}
+
+/* ---- Contenedores de contenido ---- */
+.spg-panel{background:var(--blanco);border:1px solid var(--gris-calido);border-radius:var(--radius);padding:1.2rem;}
+
+/* ---- Tablas ---- */
+.table thead th{background:var(--blanco-hueso);color:var(--gris-oscuro);font-weight:500;font-size:.8rem;
+  text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--gris-calido);}
+.table td{vertical-align:middle;}
+
+/* ---- Botones ---- */
+.btn-oro{background:var(--oro);border:none;color:var(--negro);font-weight:500;}
+.btn-oro:hover{background:var(--oro-oscuro);color:var(--blanco);}
+.btn-outline-neutro{background:var(--blanco);border:1px solid var(--gris-calido);color:var(--gris-oscuro);}
+.btn-outline-neutro:hover{border-color:var(--gris-oscuro);color:var(--carbon);}
+.btn-cancelar{background:var(--blanco);border:1px solid var(--gris-calido);color:var(--rojo);}
+.btn-cancelar:hover{background:#f7ecec;border-color:var(--rojo);color:var(--rojo);}
+a.link-oro{color:var(--oro-oscuro);text-decoration:none;}
+a.link-oro:hover{text-decoration:underline;}
+
+/* ---- Badges de estado ---- */
+.badge-estado{font-size:.72rem;font-weight:500;padding:.2rem .6rem;border-radius:20px;display:inline-block;}
+.e-ok{background:#e6f0e6;color:#2f5d2f;}
+.e-prog{background:#fbf1d8;color:var(--oro-oscuro);}
+.e-proc{background:#e3edf6;color:#1c4f79;}
+.e-warn{background:#fbf1d8;color:#8a6d0b;}
+.e-no{background:#f7ecec;color:var(--rojo);}
+.e-muted{background:var(--gris-calido);color:var(--gris-oscuro);}
+
+/* ---- Métricas del dashboard ---- */
+.spg-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:.4rem;}
+.spg-metric{background:var(--blanco);border:1px solid var(--gris-calido);border-radius:var(--radius);padding:1rem 1.1rem;}
+.spg-metric .lbl{font-size:.75rem;color:var(--gris-oscuro);text-transform:uppercase;letter-spacing:.03em;}
+.spg-metric .val{font-size:1.6rem;font-weight:500;margin-top:.2rem;}
+.spg-metric .val.oro{color:var(--oro-oscuro);}
+
+/* ---- Login ---- */
+.spg-login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;}
+.spg-login{background:var(--blanco);border:1px solid var(--gris-calido);border-radius:16px;padding:2rem;width:100%;max-width:390px;}
+.spg-login .logo-big{width:56px;height:56px;border-radius:14px;background:var(--oro);display:flex;align-items:center;
+  justify-content:center;color:var(--negro);font-size:1.9rem;margin:0 auto 1rem;}
+
+/* ---- Form ---- */
+.form-label{font-size:.82rem;color:var(--gris-oscuro);font-weight:500;}
+.form-control:focus,.form-select:focus{border-color:var(--oro);box-shadow:0 0 0 .18rem rgba(201,168,76,.18);}
+
+/* ---- Utilidades ---- */
+.text-muted-warm{color:var(--gris-oscuro)!important;}
+.hr-warm{border-top:1px solid var(--gris-calido);}
+
+/* ---- Responsive (móviles) ---- */
+html,body{max-width:100%;overflow-x:hidden;}
+@media (max-width:768px){
+  .spg-cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.7rem;}
+}
+@media (max-width:576px){
+  .spg-topbar{padding:.6rem .9rem;}
+  .spg-brand-name{font-size:.95rem;}
+  .spg-user{gap:.55rem;font-size:.8rem;}
+  .spg-user .spg-user-nombre{display:none;}      /* en móvil, solo ícono + rol + salir */
+  .spg-page-head h1{font-size:1.15rem;}
+  .spg-cards{grid-template-columns:1fr 1fr;gap:.6rem;}
+  .spg-card{padding:.9rem;}
+  .spg-card .ic{width:38px;height:38px;font-size:1.2rem;}
+  .spg-card h3{font-size:.92rem;margin-top:.6rem;}
+  .spg-card p{font-size:.72rem;}
+  .spg-metric .val{font-size:1.35rem;}
+  .spg-panel{padding:.9rem;}
+  .table{font-size:.85rem;}
+  .btn{font-size:.9rem;}
+}
+@media (max-width:380px){
+  .spg-cards{grid-template-columns:1fr;}
+}

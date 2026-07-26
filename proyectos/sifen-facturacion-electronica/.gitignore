@@ -1,0 +1,56 @@
+# ============================================
+# .gitignore - SIFEN v150
+# ============================================
+
+# Configuración local (NUNCA commitear)
+.env
+
+# Node modules (no commitear, se genera con npm install)
+sifen-node/node_modules/
+
+# Archivos de desarrollo (pueden eliminarse antes de comercializar)
+SETUP_INICIAL.bat
+SETUP_INICIAL.sh
+EJECUTAR.bat
+EJECUTAR.sh
+setup.bat
+setup.sh
+GUIA_RAPIDA.txt
+LEER_PRIMERO.txt
+ARCHIVOS_DESARROLLO.txt
+SOLUTION_SUMMARY.txt
+
+# Storage generado en runtime (archivos del usuario, no código)
+storage/xml/*
+storage/kude/*
+storage/emails/*
+storage/logs/*
+storage/certs/*
+
+# Excepto los directorios mismos (para que git mantenga la estructura)
+!storage/xml/.gitkeep
+!storage/kude/.gitkeep
+!storage/emails/.gitkeep
+!storage/logs/.gitkeep
+!storage/certs/.gitkeep
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Composer (si se agrega PHP en el futuro)
+vendor/
+composer.lock
+
+# Logs de sistema
+*.log
+logs/
+
+# Cache
+.cache/
+__pycache__/
+*.pyc

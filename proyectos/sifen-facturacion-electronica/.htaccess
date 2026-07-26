@@ -1,0 +1,34 @@
+# ============================================================
+# .htaccess (raíz del proyecto) — SIFEN v150
+#
+# OPCIÓN RECOMENDADA en cPanel: apuntar el "Document Root" del dominio/subdominio
+# directamente a  .../app/public  (Dominios → Administrar → Document Root). En ese
+# caso este archivo NI SE USA, porque queda fuera del directorio público.
+#
+# OPCIÓN ALTERNATIVA: si subís todo a public_html y NO podés cambiar el Document
+# Root, este archivo: (1) bloquea el acceso directo a las carpetas internas y al
+# .env, y (2) enruta todas las peticiones hacia app/public/ (front controller).
+# ============================================================
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # 1) Bloquear acceso directo a archivos/carpetas sensibles.
+  RewriteRule (^|/)\.env  - [F]
+  RewriteRule (^|/)\.git  - [F]
+  RewriteRule ^(app/(config|src|scripts)|db|storage)(/|$) - [F]
+
+  # 2) Enrutar al directorio público real, PERO sirviendo directamente los archivos
+  #    reales que existan en la raíz (p. ej. verificar_servidor.php). Las carpetas
+  #    sensibles ya quedaron bloqueadas arriba, así que esto es seguro.
+  RewriteCond %{REQUEST_URI} !^/app/public/
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^(.*)$ app/public/$1 [L]
+</IfModule>
+
+# Defensa adicional para servidores sin mod_rewrite: negar el .env explícitamente.
+<FilesMatch "^\.env">
+  Require all denied
+</FilesMatch>
+
+Options -Indexes

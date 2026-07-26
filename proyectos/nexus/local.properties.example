@@ -1,0 +1,11 @@
+# Copia este archivo como `local.properties` y rellena los dos valores.
+# `local.properties` NO se versiona: lleva rutas locales y la clave de API.
+
+# Ruta al SDK de Android (Android Studio la escribe sola al abrir el proyecto).
+sdk.dir=C\:\\Users\\TU_USUARIO\\AppData\\Local\\Android\\Sdk
+
+# Clave de TMDB para el catálogo de películas y series. Es gratuita:
+# https://www.themoviedb.org/settings/api
+# Sin ella la app arranca igual, pero solo con el catálogo de anime (AniList,
+# que no pide clave). Se inyecta en BuildConfig.TMDB_API_KEY al compilar.
+TMDB_API_KEY=

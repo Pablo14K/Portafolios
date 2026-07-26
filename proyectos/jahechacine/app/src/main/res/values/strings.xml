@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">JahechaCine</string>
+    <string name="navigation_drawer_open">Abrir menú de navegación</string>
+    <string name="navigation_drawer_close">Cerrar menú de navegación</string>
+    <string name="error_loading">Error al cargar contenido</string>
+    <string name="reproducir">Reproducir</string>
+    <string name="sinopsis">Sinopsis</string>
+    <string name="nav_home">Página Principal</string>
+    <string name="nav_movies">Películas</string>
+    <string name="nav_series">Series</string>
+    <string name="nav_options">Opciones</string>
+    <string name="nav_settings">Ajustes</string>
+</resources>

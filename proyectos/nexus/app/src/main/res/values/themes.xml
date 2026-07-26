@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.Nexus" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/nexus_black</item>
+        <item name="android:colorAccent">@color/nexus_signal</item>
+    </style>
+
+    <!-- Evita el parpadeo blanco antes de que Compose dibuje. -->
+    <style name="Theme.Nexus.Splash" parent="Theme.Nexus">
+        <item name="android:windowBackground">@color/nexus_black</item>
+    </style>
+
+    <style name="Theme.Nexus.Player" parent="Theme.Nexus">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowContentTransitions">false</item>
+    </style>
+
+</resources>
