@@ -15,25 +15,9 @@ function configuracion_index(): void
         'desc' => 'Ajustes del sistema y del negocio.', 'subs' => $subs], 'Configuración');
 }
 
-function configuracion_local(): void
-{
-    requiere_modulo('configuracion');
-    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
-        q("UPDATE sucursal SET nombre=:nombre,ruc=:ruc,telefono=:telefono,direccion=:direccion,ciudad=:ciudad WHERE id_sucursal=1", [
-            'nombre'   => trim((string)post('nombre', '')),
-            'ruc'      => trim((string)post('ruc', '')) ?: null,
-            'telefono' => trim((string)post('telefono', '')) ?: null,
-            'direccion' => trim((string)post('direccion', '')) ?: null,
-            'ciudad'   => trim((string)post('ciudad', '')) ?: null,
-        ]);
-        flash('Datos del local actualizados.');
-        redirect('index.php?r=configuracion/local');
-    }
-    $s = fetch_one("SELECT * FROM sucursal WHERE id_sucursal=1");
-    view('configuracion/local', ['s' => $s], 'Datos del local');
-}
-
 // ---------- Sucursales (multisucursal) ----------
+// (La antigua pantalla "Datos del local" se retiró: editaba únicamente la
+//  sucursal 1 y quedó cubierta por el alta/edición de sucursales.)
 function configuracion_sucursales(): void
 {
     requiere_modulo('configuracion');
@@ -154,10 +138,57 @@ function configuracion_catalogos(): void
         redirect('index.php?r=configuracion/catalogos');
     }
     view('configuracion/catalogos', [
-        'cat_prod' => fetch_all("SELECT * FROM categoria_producto ORDER BY nombre"),
-        'cat_serv' => fetch_all("SELECT * FROM categoria_servicio ORDER BY nombre"),
+        'cat_prod' => fetch_all("SELECT c.*, (SELECT COUNT(*) FROM producto p WHERE p.id_categoria=c.id_categoria) AS usos FROM categoria_producto c ORDER BY nombre"),
+        'cat_serv' => fetch_all("SELECT c.*, (SELECT COUNT(*) FROM servicio s WHERE s.id_categoria_servicio=c.id_categoria_servicio) AS usos FROM categoria_servicio c ORDER BY nombre"),
         'niveles'  => fetch_all("SELECT n.*, d.nombre AS descuento FROM nivel n LEFT JOIN descuento d ON d.id_descuento=n.id_descuento ORDER BY n.visitas_minimas"),
     ], 'Catálogos');
+}
+
+// Renombrar una categoría (producto o servicio)
+function configuracion_catalogo_editar(): void
+{
+    requiere_modulo('configuracion');
+    $tipo = (string)post('tipo', '');
+    $id = (int)post('id', 0);
+    $nombre = trim((string)post('nombre', ''));
+    if ($id && $nombre !== '') {
+        try {
+            if ($tipo === 'producto') {
+                q("UPDATE categoria_producto SET nombre=? WHERE id_categoria=?", [$nombre, $id]);
+            } elseif ($tipo === 'servicio') {
+                q("UPDATE categoria_servicio SET nombre=? WHERE id_categoria_servicio=?", [$nombre, $id]);
+            }
+            auditar('MODIFICACION', 'Configuracion', 'categoria_' . $tipo, $id, $nombre);
+            flash('Categoría actualizada.');
+        } catch (PDOException $e) { flash('Ya existe otra categoría con ese nombre.', 'error'); }
+    } else {
+        flash('El nombre no puede quedar vacío.', 'error');
+    }
+    redirect('index.php?r=configuracion/catalogos');
+}
+
+// Eliminar una categoría (solo si no está en uso)
+function configuracion_catalogo_borrar(): void
+{
+    requiere_modulo('configuracion');
+    $tipo = (string)post('tipo', '');
+    $id = (int)post('id', 0);
+    try {
+        if ($tipo === 'producto') {
+            $usos = (int)fetch_val("SELECT COUNT(*) FROM producto WHERE id_categoria=?", [$id]);
+            if ($usos) { flash("No se puede eliminar: hay $usos producto(s) en esa categoría.", 'warning'); redirect('index.php?r=configuracion/catalogos'); }
+            q("DELETE FROM categoria_producto WHERE id_categoria=?", [$id]);
+        } elseif ($tipo === 'servicio') {
+            $usos = (int)fetch_val("SELECT COUNT(*) FROM servicio WHERE id_categoria_servicio=?", [$id]);
+            if ($usos) { flash("No se puede eliminar: hay $usos servicio(s) en esa categoría.", 'warning'); redirect('index.php?r=configuracion/catalogos'); }
+            q("DELETE FROM categoria_servicio WHERE id_categoria_servicio=?", [$id]);
+        }
+        auditar('BAJA', 'Configuracion', 'categoria_' . $tipo, $id, 'Categoría eliminada');
+        flash('Categoría eliminada.');
+    } catch (PDOException $e) {
+        flash('No se pudo eliminar la categoría.', 'error');
+    }
+    redirect('index.php?r=configuracion/catalogos');
 }
 
 function configuracion_auditoria(): void

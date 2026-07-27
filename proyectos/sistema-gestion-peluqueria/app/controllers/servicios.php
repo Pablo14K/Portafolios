@@ -94,6 +94,38 @@ function servicios_categorias(): void
     view('servicios/categorias', ['rows' => $rows], 'Categorías de servicio');
 }
 
+function servicios_categoria_editar(): void
+{
+    requiere_modulo('servicios');
+    $id = (int)post('id', 0);
+    $nombre = trim((string)post('nombre', ''));
+    if ($id && $nombre !== '') {
+        try {
+            q("UPDATE categoria_servicio SET nombre=? WHERE id_categoria_servicio=?", [$nombre, $id]);
+            auditar('MODIFICACION', 'Servicios', 'categoria_servicio', $id, $nombre);
+            flash('Categoría actualizada.');
+        } catch (PDOException $e) { flash('Ya existe otra categoría con ese nombre.', 'error'); }
+    } else {
+        flash('El nombre no puede quedar vacío.', 'error');
+    }
+    redirect('index.php?r=servicios/categorias');
+}
+
+function servicios_categoria_borrar(): void
+{
+    requiere_modulo('servicios');
+    $id = (int)post('id', 0);
+    $usos = (int)fetch_val("SELECT COUNT(*) FROM servicio WHERE id_categoria_servicio=?", [$id]);
+    if ($usos) {
+        flash("No se puede eliminar: hay $usos servicio(s) en esa categoría.", 'warning');
+    } else {
+        q("DELETE FROM categoria_servicio WHERE id_categoria_servicio=?", [$id]);
+        auditar('BAJA', 'Servicios', 'categoria_servicio', $id, 'Categoría eliminada');
+        flash('Categoría eliminada.');
+    }
+    redirect('index.php?r=servicios/categorias');
+}
+
 function servicios_descuentos(): void
 {
     requiere_modulo('servicios');

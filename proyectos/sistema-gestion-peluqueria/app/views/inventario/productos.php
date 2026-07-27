@@ -15,8 +15,8 @@
         <tr>
           <td><?= e($p['nombre']) ?> <span class="text-muted-warm" style="font-size:.8rem">(<?= e($p['unidad_medida']) ?>)</span></td>
           <td class="text-muted-warm"><?= e($p['categoria']) ?></td>
-          <td><?= $bajo && $p['activo'] ? '<span class="badge-estado e-no">' . e((float)$p['stock_actual']) . '</span>' : e((float)$p['stock_actual']) ?></td>
-          <td class="text-muted-warm"><?= e((float)$p['stock_minimo']) ?></td>
+          <td><?= $bajo && $p['activo'] ? '<span class="badge-estado e-no">' . e(cant($p['stock_actual'])) . '</span>' : e(cant($p['stock_actual'])) ?></td>
+          <td class="text-muted-warm"><?= e(cant($p['stock_minimo'])) ?></td>
           <td><?= money($p['precio_costo']) ?></td>
           <td><?= money($p['precio_venta']) ?></td>
           <td><?= $p['activo'] ? '<span class="badge-estado e-ok">Activo</span>' : '<span class="badge-estado e-muted">Inactivo</span>' ?></td>

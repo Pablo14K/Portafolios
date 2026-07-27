@@ -90,11 +90,6 @@ function es_cliente(): bool
     return (int)($_SESSION['rol'] ?? 0) === ROL_CLIENTE;
 }
 
-function es_personal(): bool
-{
-    return esta_logueado() && !es_cliente();
-}
-
 // Exige sesión iniciada; si no, va al login
 function requiere_login(): void
 {
@@ -138,10 +133,26 @@ function modulos_sistema(): array
 }
 
 // ¿El rol tiene habilitado ese módulo? La Propietaria siempre (superadmin).
+// Los permisos del rol se leen una sola vez por petición: dibujar el menú
+// preguntaba una vez por módulo (una consulta por tarjeta).
 function rol_puede(int $rol, string $modulo): bool
 {
+    static $cache = [];
     if ($rol === ROL_PROPIETARIA) return true;
-    return (int)fetch_val("SELECT COUNT(*) FROM rol_modulo WHERE id_rol=? AND modulo=?", [$rol, $modulo]) > 0;
+
+    if (!isset($cache[$rol])) {
+        try {
+            $cache[$rol] = array_column(
+                fetch_all("SELECT modulo FROM rol_modulo WHERE id_rol=?", [$rol]),
+                'modulo'
+            );
+        } catch (PDOException $e) {
+            // Si la tabla de permisos todavía no existe, no se bloquea al
+            // personal: se aplica el criterio por defecto (todo menos Configuración).
+            $cache[$rol] = array_diff(array_keys(modulos_sistema()), ['configuracion']);
+        }
+    }
+    return in_array($modulo, $cache[$rol], true);
 }
 
 // Exige que el usuario actual (personal) tenga habilitado el módulo

@@ -10,6 +10,7 @@ function facturacion_index(): void
         ['r' => 'facturacion/cobros',   'ic' => 'cash-coin',  't' => 'Cobros',    'd' => 'Pagos recibidos de clientes'],
         ['r' => 'facturacion/caja',     'ic' => 'safe',       't' => 'Caja',      'd' => 'Apertura, cierre y saldo'],
         ['r' => 'facturacion/pagos',    'ic' => 'wallet2',    't' => 'Pagos al personal', 'd' => 'Comisiones y liquidaciones'],
+        ['r' => 'facturacion/proveedores','ic' => 'truck',    't' => 'Pagos a proveedores', 'd' => 'Cuentas por pagar de compras'],
     ];
     view('modulo_landing', ['titulo_mod' => 'Facturación y caja', 'icono' => 'cash-stack',
         'desc' => 'Facturas, cobros, caja y pagos al personal.', 'subs' => $subs], 'Facturación');
@@ -136,7 +137,89 @@ function facturacion_cerrar_caja(): void
 
 function facturacion_pagos(): void
 {
-    requiere_rol([ROL_PROPIETARIA, ROL_GERENTE]);
+    requiere_modulo('facturacion');
     $rows = fetch_all("SELECT * FROM vw_pago_personal_resumen ORDER BY fecha DESC LIMIT 200");
-    view('facturacion/pagos', ['rows' => $rows], 'Pagos al personal');
+    $profs = fetch_all(
+        "SELECT u.id_usuario, u.nombre, u.apellido,
+                (SELECT COUNT(*) FROM servicio_realizado sr
+                  LEFT JOIN detalle_pago_personal d ON d.id_servicio_realizado = sr.id_servicio_realizado
+                  WHERE sr.id_usuario = u.id_usuario AND d.id_detalle_pago IS NULL) AS pendientes
+           FROM usuario u WHERE u.activo=1 AND u.id_rol IN (1,2,3) ORDER BY u.nombre"
+    );
+    view('facturacion/pagos', ['rows' => $rows, 'profs' => $profs], 'Pagos al personal');
+}
+
+// Liquida al profesional los servicios realizados que todavía no se le pagaron
+function facturacion_pagar_personal(): void
+{
+    requiere_modulo('facturacion');
+    $u = usuario_actual();
+    $idProf = (int)post('id_usuario', 0);
+    $periodo = trim((string)post('periodo', '')) ?: date('m/Y');
+    if (!$idProf) { flash('Elegí un profesional.', 'error'); redirect('index.php?r=facturacion/pagos'); }
+
+    $pend = (int)fetch_val(
+        "SELECT COUNT(*) FROM servicio_realizado sr
+          LEFT JOIN detalle_pago_personal d ON d.id_servicio_realizado = sr.id_servicio_realizado
+         WHERE sr.id_usuario=? AND d.id_detalle_pago IS NULL", [$idProf]
+    );
+    if (!$pend) {
+        flash('Ese profesional no tiene servicios pendientes de liquidar.', 'warning');
+        redirect('index.php?r=facturacion/pagos');
+    }
+    try {
+        $st = db()->prepare("CALL sp_registrar_pago_personal(?,?,?, @p)");
+        $st->execute([$idProf, $u['id'], $periodo]);
+        $st->closeCursor();
+        $idPago = (int)db()->query("SELECT @p")->fetchColumn();
+        auditar('PAGO_PERSONAL', 'Facturacion', 'pago_personal', $idPago, "Liquidación $periodo ($pend servicios)");
+        flash('Pago al profesional registrado.');
+    } catch (PDOException $ex) {
+        flash('No se pudo registrar el pago: ' . $ex->getMessage(), 'error');
+    }
+    redirect('index.php?r=facturacion/pagos');
+}
+
+// ---------- Pagos a proveedores ----------
+function facturacion_proveedores(): void
+{
+    requiere_modulo('facturacion');
+    $cuentas = fetch_all("SELECT * FROM vw_cuenta_proveedor WHERE saldo > 0 ORDER BY vencida DESC, vencimiento");
+    // El monto no se guarda: se calcula con la función de la base (modelo 3FN)
+    $pagos = fetch_all(
+        "SELECT pp.fecha, pp.referencia,
+                fn_pago_proveedor_monto(pp.id_pago_proveedor) AS monto,
+                pr.nombre AS proveedor, mp.nombre AS metodo, ep.nombre AS estado
+           FROM pago_proveedor pp
+           JOIN proveedor pr ON pr.id_proveedor = pp.id_proveedor
+           JOIN metodo_pago mp ON mp.id_metodo_pago = pp.id_metodo_pago
+           JOIN estado_pago_proveedor ep ON ep.id_estado_pago_proveedor = pp.id_estado_pago_proveedor
+          ORDER BY pp.fecha DESC LIMIT 100"
+    );
+    $metodos = fetch_all("SELECT id_metodo_pago, nombre FROM metodo_pago ORDER BY id_metodo_pago");
+    view('facturacion/proveedores', ['cuentas' => $cuentas, 'pagos' => $pagos, 'metodos' => $metodos], 'Pagos a proveedores');
+}
+
+function facturacion_pagar_proveedor(): void
+{
+    requiere_modulo('facturacion');
+    $u = usuario_actual();
+    $idCompra = (int)post('id_compra', 0);
+    $idMetodo = (int)post('id_metodo_pago', 1) ?: 1;
+    $monto    = (float)post('monto', 0);
+    $ref      = trim((string)post('referencia', '')) ?: null;
+    if ($monto <= 0) { flash('Ingresá un monto válido.', 'error'); redirect('index.php?r=facturacion/proveedores'); }
+    try {
+        $st = db()->prepare("CALL sp_pagar_compra(?,?,?,?,?, @p)");
+        $st->execute([$idCompra, $idMetodo, $u['id'], $monto, $ref]);
+        $st->closeCursor();
+        auditar('PAGO_PROVEEDOR', 'Facturacion', 'compra', $idCompra, 'Pago ' . money($monto));
+        flash('Pago al proveedor registrado. Si hay una caja abierta, el egreso queda reflejado en ella.');
+    } catch (PDOException $ex) {
+        $msg = $ex->getMessage();
+        $amable = strpos($msg, 'saldo') !== false ? 'El monto supera el saldo pendiente de la compra.'
+                : (strpos($msg, 'confirmada') !== false ? 'Solo se pueden pagar compras confirmadas.' : 'No se pudo registrar el pago.');
+        flash($amable, 'error');
+    }
+    redirect('index.php?r=facturacion/proveedores');
 }

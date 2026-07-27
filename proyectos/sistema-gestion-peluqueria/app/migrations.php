@@ -9,6 +9,28 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/db.php';
 
+// Verifica que las tablas de apoyo existan y, si falta alguna, las crea.
+// Se llama en cada arranque (index.php): si la base se reimporta, el sistema
+// se repara solo, sin depender de que se vuelva a ejecutar install.php.
+function asegurar_migraciones(): void
+{
+    if (!empty($_SESSION['_migracion_ok'])) return;   // ya verificado en esta sesión
+    try {
+        $n = (int)fetch_val(
+            "SELECT COUNT(*) FROM information_schema.tables
+              WHERE table_schema = DATABASE()
+                AND table_name IN ('token_seguridad','credencial_webauthn','preferencia_usuario','rol_modulo')"
+        );
+        if ($n < 4) {
+            migrar();
+        }
+        $_SESSION['_migracion_ok'] = 1;
+    } catch (Throwable $e) {
+        // Nunca romper la aplicación por la verificación
+        error_log('SPG migracion: ' . $e->getMessage());
+    }
+}
+
 function migrar(): void
 {
     $pdo = db();
