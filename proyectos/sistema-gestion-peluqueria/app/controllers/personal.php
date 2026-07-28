@@ -216,5 +216,16 @@ function personal_asistencia(): void
            LEFT JOIN asistencia a ON a.id_turno=t.id_turno
           WHERE t.activo=1 ORDER BY t.fecha DESC, t.hora_inicio LIMIT 60"
     );
-    view('personal/asistencia', ['rows' => $rows, 'turnos' => $turnos], 'Asistencia');
+    // Si se pidió editar una asistencia, se precarga en el formulario
+    $editar = null;
+    $idEdit = (int)get('editar', 0);
+    if ($idEdit) {
+        $editar = fetch_one(
+            "SELECT a.*, t.fecha, CONCAT(u.nombre,' ',u.apellido) AS profesional
+               FROM asistencia a JOIN turno_laboral t ON t.id_turno=a.id_turno
+               JOIN usuario u ON u.id_usuario=t.id_usuario
+              WHERE a.id_turno=?", [$idEdit]
+        );
+    }
+    view('personal/asistencia', ['rows' => $rows, 'turnos' => $turnos, 'editar' => $editar], 'Asistencia');
 }

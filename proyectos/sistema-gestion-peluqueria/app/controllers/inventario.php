@@ -9,6 +9,7 @@ function inventario_index(): void
         ['r' => 'inventario/productos',  'ic' => 'box-seam',   't' => 'Productos',   'd' => 'Catálogo, precios y stock mínimo'],
         ['r' => 'inventario/proveedores','ic' => 'truck',      't' => 'Proveedores', 'd' => 'Datos y saldos'],
         ['r' => 'inventario/stock',      'ic' => 'clipboard-data', 't' => 'Stock',   'd' => 'Existencias y alertas de reposición'],
+        ['r' => 'inventario/movimientos','ic' => 'arrow-left-right', 't' => 'Movimientos', 'd' => 'Entradas y salidas de stock'],
         ['r' => 'inventario/compras',    'ic' => 'bag',        't' => 'Compras',     'd' => 'Ingresos de mercadería'],
     ];
     view('modulo_landing', ['titulo_mod' => 'Inventario', 'icono' => 'box-seam',
@@ -95,6 +96,32 @@ function inventario_ajuste(): void
     $prods = fetch_all("SELECT id_producto, nombre FROM producto WHERE activo=1 ORDER BY nombre");
     $tipos = fetch_all("SELECT * FROM tipo_movimiento_inventario ORDER BY nombre");
     view('inventario/ajuste', ['prods' => $prods, 'tipos' => $tipos], 'Ajuste de stock');
+}
+
+// ---------- Movimientos (libro mayor de stock) ----------
+function inventario_movimientos(): void
+{
+    requiere_modulo('inventario');
+    $idp = (int)get('producto', 0);
+    $par = [];
+    $where = '';
+    if ($idp) { $where = 'WHERE m.id_producto = :p'; $par['p'] = $idp; }
+
+    $rows = fetch_all(
+        "SELECT m.fecha, m.cantidad, m.precio_unitario, m.referencia, m.observaciones,
+                p.nombre AS producto, p.unidad_medida,
+                tm.nombre AS tipo, tm.signo,
+                CONCAT(u.nombre,' ',u.apellido) AS usuario
+           FROM movimiento_inventario m
+           JOIN producto p ON p.id_producto = m.id_producto
+           JOIN tipo_movimiento_inventario tm ON tm.id_tipo_movimiento = m.id_tipo_movimiento
+           JOIN usuario u ON u.id_usuario = m.id_usuario
+           $where
+          ORDER BY m.fecha DESC, m.id_movimiento DESC LIMIT 300", $par
+    );
+    $prods = fetch_all("SELECT id_producto, nombre FROM producto ORDER BY nombre");
+    $prod = $idp ? fetch_one("SELECT nombre, unidad_medida, fn_producto_stock(id_producto) AS stock FROM producto WHERE id_producto=?", [$idp]) : null;
+    view('inventario/movimientos', ['rows' => $rows, 'prods' => $prods, 'idp' => $idp, 'prod' => $prod], 'Movimientos de stock');
 }
 
 // ---------- Stock ----------

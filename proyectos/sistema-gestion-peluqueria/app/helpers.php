@@ -16,6 +16,17 @@ function money($n): string
     return MONEDA . ' ' . number_format((float)$n, 0, ',', '.');
 }
 
+// Formato de cantidad: sin decimales si es un número entero (12 en vez de 12,00);
+// con decimales solo cuando el producto se vende o consume fraccionado (0,5).
+function cant($n): string
+{
+    $v = (float)$n;
+    if (abs($v - round($v)) < 0.005) {
+        return number_format($v, 0, ',', '.');
+    }
+    return rtrim(rtrim(number_format($v, 2, ',', '.'), '0'), ',');
+}
+
 // Formato de fecha/hora legible
 function fecha($dt, string $fmt = 'd/m/Y H:i'): string
 {

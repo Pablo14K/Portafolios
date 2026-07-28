@@ -112,6 +112,100 @@ function citas_reprogramar(): void
     redirect('index.php?r=citas/agenda&dia=' . substr($nueva, 0, 10));
 }
 
+// ---------- Registrar la atención de una cita ----------
+// Aquí se anota qué servicios se hicieron y qué productos se gastaron.
+// El consumo descuenta el stock automáticamente (trigger de la base).
+function citas_atender(): void
+{
+    requiere_modulo('citas');
+    $id = (int)get('id', 0);
+    $cita = fetch_one(
+        "SELECT c.*, CONCAT(cl.nombre,' ',cl.apellido) AS cliente, CONCAT(u.nombre,' ',u.apellido) AS profesional
+           FROM cita c JOIN cliente cl ON cl.id_cliente=c.id_cliente JOIN usuario u ON u.id_usuario=c.id_usuario
+          WHERE c.id_cita=?", [$id]
+    );
+    if (!$cita) { flash('Cita no encontrada.', 'error'); redirect('index.php?r=citas/agenda'); }
+
+    $servicios = fetch_all(
+        "SELECT s.id_servicio, s.nombre, s.precio,
+                (SELECT COUNT(*) FROM servicio_realizado sr WHERE sr.id_cita=cs.id_cita AND sr.id_servicio=cs.id_servicio) AS ya
+           FROM cita_servicio cs JOIN servicio s ON s.id_servicio=cs.id_servicio
+          WHERE cs.id_cita=? ORDER BY s.nombre", [$id]
+    );
+    $productos = fetch_all("SELECT id_producto, nombre, unidad_medida FROM producto WHERE activo=1 ORDER BY nombre");
+    $usados = fetch_all(
+        "SELECT p.nombre, pu.cantidad, p.unidad_medida
+           FROM producto_utilizado pu
+           JOIN producto p ON p.id_producto=pu.id_producto
+           JOIN servicio_realizado sr ON sr.id_servicio_realizado=pu.id_servicio_realizado
+          WHERE sr.id_cita=?", [$id]
+    );
+    view('citas/atender', ['cita' => $cita, 'servicios' => $servicios, 'productos' => $productos, 'usados' => $usados], 'Registrar atención');
+}
+
+function citas_atender_guardar(): void
+{
+    requiere_modulo('citas');
+    $u = usuario_actual();
+    $id_cita = (int)post('id_cita', 0);
+    $realizados = array_map('intval', (array)post('servicios', []));
+    $prodIds = (array)post('producto', []);
+    $prodCant = (array)post('cantidad', []);
+    $obs = trim((string)post('observaciones', '')) ?: null;
+
+    $cita = fetch_one("SELECT id_usuario FROM cita WHERE id_cita=?", [$id_cita]);
+    if (!$cita) { flash('Cita no encontrada.', 'error'); redirect('index.php?r=citas/agenda'); }
+    // Solo se aceptan servicios que realmente estén agendados en esta cita
+    $agendados = array_column(fetch_all("SELECT id_servicio FROM cita_servicio WHERE id_cita=?", [$id_cita]), 'id_servicio');
+    $realizados = array_values(array_intersect($realizados, array_map('intval', $agendados)));
+
+    if (!$realizados) {
+        flash('Marcá al menos un servicio realizado.', 'error');
+        redirect('index.php?r=citas/atender&id=' . $id_cita);
+    }
+
+    $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $existe = $pdo->prepare("SELECT id_servicio_realizado FROM servicio_realizado WHERE id_cita=? AND id_servicio=? LIMIT 1");
+        $insSR = $pdo->prepare("INSERT INTO servicio_realizado (id_cita,id_servicio,id_usuario,observaciones) VALUES (?,?,?,?)");
+        $insPU = $pdo->prepare("INSERT INTO producto_utilizado (id_servicio_realizado,id_producto,cantidad) VALUES (?,?,?)
+                                ON DUPLICATE KEY UPDATE cantidad = cantidad + VALUES(cantidad)");
+
+        $idsSR = [];
+        foreach ($realizados as $sid) {
+            $existe->execute([$id_cita, $sid]);
+            $ya = $existe->fetchColumn();
+            if ($ya) { $idsSR[] = (int)$ya; continue; }
+            $insSR->execute([$id_cita, $sid, (int)$cita['id_usuario'], $obs]);
+            $idsSR[] = (int)$pdo->lastInsertId();
+        }
+
+        // Los productos se imputan al primer servicio realizado de la cita
+        $srPrincipal = $idsSR[0];
+        $nProd = 0;
+        foreach ($prodIds as $i => $pid) {
+            $pid = (int)$pid;
+            $c = (float)($prodCant[$i] ?? 0);
+            if ($pid <= 0 || $c <= 0) continue;
+            $insPU->execute([$srPrincipal, $pid, $c]);
+            $nProd++;
+        }
+
+        $pdo->prepare("UPDATE cita SET id_estado_cita=4 WHERE id_cita=?")->execute([$id_cita]);
+        $pdo->commit();
+
+        auditar('ATENCION', 'Citas', 'servicio_realizado', $id_cita,
+            count($idsSR) . ' servicio(s), ' . $nProd . ' producto(s) consumido(s)');
+        flash('Atención registrada.' . ($nProd ? ' El stock de los productos usados fue descontado.' : ''));
+    } catch (PDOException $ex) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        flash('No se pudo registrar la atención: ' . $ex->getMessage(), 'error');
+        redirect('index.php?r=citas/atender&id=' . $id_cita);
+    }
+    redirect('index.php?r=citas/agenda&dia=' . (string)post('dia', date('Y-m-d')));
+}
+
 // ---------- Excepciones de agenda ----------
 function citas_ausencias(): void
 {

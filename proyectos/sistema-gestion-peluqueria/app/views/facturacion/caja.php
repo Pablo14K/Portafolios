@@ -30,12 +30,15 @@
       <h2 style="font-size:.95rem;font-weight:500;margin-bottom:.8rem;">Historial de cajas</h2>
       <div class="table-responsive">
         <table class="table align-middle mb-0">
-          <thead><tr><th>Apertura</th><th>Responsable</th><th>Inicial</th><th>Cobros</th><th>Saldo</th><th>Estado</th></tr></thead>
+          <thead><tr><th>Apertura</th><th>Cierre</th><th>Responsable</th><th>Inicial</th><th>Cobros</th><th>Egresos</th><th>Saldo</th><th>Estado</th></tr></thead>
           <tbody>
-          <?php if (!$rows): ?><tr><td colspan="6" class="text-center text-muted-warm py-4">Sin registros.</td></tr><?php endif; ?>
+          <?php if (!$rows): ?><tr><td colspan="8" class="text-center text-muted-warm py-4">Sin registros.</td></tr><?php endif; ?>
           <?php foreach ($rows as $c): ?>
-            <tr><td><?= e(fecha($c['fecha_apertura'])) ?></td><td><?= e($c['responsable']) ?></td>
+            <tr><td><?= e(fecha($c['fecha_apertura'])) ?></td>
+              <td><?= $c['fecha_cierre'] ? e(fecha($c['fecha_cierre'])) : '<span class="text-muted-warm">—</span>' ?></td>
+              <td><?= e($c['responsable']) ?></td>
               <td><?= money($c['monto_inicial']) ?></td><td><?= money($c['cobros']) ?></td>
+              <td><?= money($c['egresos']) ?></td>
               <td><?= money($c['saldo']) ?></td><td><?= estado_badge($c['estado']) ?></td></tr>
           <?php endforeach; ?>
           </tbody>

@@ -13,6 +13,10 @@ require_once __DIR__ . '/../app/helpers.php';
 require_once __DIR__ . '/../app/auth.php';
 require_once __DIR__ . '/../app/mail.php';
 require_once __DIR__ . '/../app/webauthn.php';
+require_once __DIR__ . '/../app/migrations.php';
+
+// Si la base se reimportó, recrea las tablas de apoyo automáticamente
+asegurar_migraciones();
 
 // Ruta pedida (por defecto: dashboard)
 $r = (string)($_GET['r'] ?? 'dashboard/index');

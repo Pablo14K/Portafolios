@@ -15,9 +15,9 @@
       <tbody>
       <?php foreach ($bajo as $b): ?>
         <tr><td><?= e($b['nombre']) ?></td><td class="text-muted-warm"><?= e($b['categoria']) ?></td>
-          <td><span class="badge-estado e-no"><?= e((float)$b['stock_actual']) ?></span></td>
-          <td class="text-muted-warm"><?= e((float)$b['stock_minimo']) ?></td>
-          <td><?= e((float)$b['faltante']) ?></td></tr>
+          <td><span class="badge-estado e-no"><?= e(cant($b['stock_actual'])) ?></span></td>
+          <td class="text-muted-warm"><?= e(cant($b['stock_minimo'])) ?></td>
+          <td><?= e(cant($b['faltante'])) ?></td></tr>
       <?php endforeach; ?>
       </tbody>
     </table>
@@ -35,7 +35,7 @@
       <?php foreach ($rows as $r): ?>
         <tr><td><?= e($r['nombre']) ?></td><td class="text-muted-warm"><?= e($r['categoria']) ?></td>
           <td class="text-muted-warm"><?= e($r['unidad_medida']) ?></td>
-          <td><?= e((float)$r['stock_actual']) ?></td><td class="text-muted-warm"><?= e((float)$r['stock_minimo']) ?></td></tr>
+          <td><?= e(cant($r['stock_actual'])) ?></td><td class="text-muted-warm"><?= e(cant($r['stock_minimo'])) ?></td></tr>
       <?php endforeach; ?>
       </tbody>
     </table>

@@ -31,9 +31,9 @@
               <form method="post" action="<?= e(base_url('index.php?r=citas/estado')) ?>" class="d-inline">
                 <?= csrf_field() ?><input type="hidden" name="id_cita" value="<?= (int)$c['id_cita'] ?>"><input type="hidden" name="dia" value="<?= e($dia) ?>">
                 <button name="id_estado_cita" value="5" class="btn btn-sm btn-outline-neutro" title="En proceso"><i class="bi bi-play"></i></button>
-                <button name="id_estado_cita" value="4" class="btn btn-sm btn-outline-neutro" title="Atendida"><i class="bi bi-check2"></i></button>
                 <button name="id_estado_cita" value="6" class="btn btn-sm btn-outline-neutro" title="Ausente"><i class="bi bi-person-x"></i></button>
               </form>
+              <a class="btn btn-sm btn-outline-neutro" href="<?= e(base_url('index.php?r=citas/atender&id=' . $c['id_cita'])) ?>" title="Registrar atención (servicios y productos usados)"><i class="bi bi-check2-square"></i></a>
               <button class="btn btn-sm btn-outline-neutro" title="Reprogramar" data-bs-toggle="modal" data-bs-target="#rep<?= (int)$c['id_cita'] ?>"><i class="bi bi-clock"></i></button>
               <form method="post" action="<?= e(base_url('index.php?r=citas/cancelar')) ?>" class="d-inline" onsubmit="return confirm('¿Cancelar esta cita?')">
                 <?= csrf_field() ?><input type="hidden" name="id_cita" value="<?= (int)$c['id_cita'] ?>"><input type="hidden" name="dia" value="<?= e($dia) ?>">
