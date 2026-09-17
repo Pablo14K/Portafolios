@@ -13,12 +13,11 @@ San Lorenzo, Paraguay · [GitHub](https://github.com/Pablo14K)
 
 
 Estudiante de Ingeniería en Informática en último año, a seis meses de titularme.
-Construyo sistemas de facturación electrónica y de gestión en PHP, Laravel y MySQL, y
-aplicaciones Android en Kotlin.
+Construyo aplicaciones web en PHP, Laravel y MySQL, y aplicaciones Android en Kotlin.
 
-Trabajo cómodo cuando el requisito es estricto y verificable: implementé el régimen
-de facturación electrónica SIFEN de la DNIT paraguaya —CDC, XML conforme al XSD
-oficial, firma XMLDSig y KuDE— sobre PHP nativo, sin dependencias externas, para que
+Trabajo cómodo cuando el requisito es estricto y verificable: implementé una
+integración completa contra una API SOAP del Estado paraguayo, ajustada a una
+especificación técnica oficial, sobre PHP nativo y sin dependencias externas, para que
 pudiera desplegarse en hosting compartido. Cuando no había librería disponible,
 escribí lo que faltaba: un codificador QR conforme a ISO/IEC 18004, un generador de
 PDF y un cliente SMTP.
@@ -59,7 +58,6 @@ como profesional.
   navegación sin JavaScript, diseño adaptable)
 - **Infraestructura:** Docker y Docker Compose, Caddy, Traefik, Apache, php-fpm,
   OPcache, cPanel, cron, Gradle, despliegue en VPS y en hosting compartido
-- **Dominio:** facturación electrónica SIFEN v150 (DNIT Paraguay)
 - **Herramientas:** Git, Android Studio, Claude Code, Codex, Antigravity
 
 **Desarrollo asistido por IA.** Uso Claude Code, Codex y Antigravity como parte
@@ -70,32 +68,33 @@ mías, y todo lo generado pasa por la batería de pruebas antes de entrar.
 ## Proyectos
 
 
-### SIFEN — Sistema de Facturación Electrónica (2026)
-Sistema completo de facturación electrónica contra la DNIT de Paraguay. Reescribí el
-motor eliminando un microservicio Node.js para dejarlo 100% PHP y desplegable en
-cPanel. Incluye un codificador QR propio conforme a ISO/IEC 18004 (Reed-Solomon sobre
-GF(256), validado contra la librería `qrcode` de Python), un generador de PDF con la
-paginación que exige el Manual Técnico v150, firma XMLDSig con RSA-SHA256 y X.509, y
-un sistema de colas que reanuda envíos interrumpidos sin duplicar comprobantes.
-~6.500 líneas de PHP. → [Ficha](../proyectos/sifen-facturacion-electronica)
+### Integración con API del Estado paraguayo (2026)
+Sistema de integración contra una API SOAP de un organismo del Estado, ajustado a una
+especificación técnica oficial que define la estructura exacta del XML, su firma y su
+representación gráfica. Reescribí el motor eliminando un microservicio Node.js para
+dejarlo 100% PHP y desplegable en cPanel. Incluye un codificador QR propio conforme a
+ISO/IEC 18004 (Reed-Solomon sobre GF(256), validado contra la librería `qrcode` de
+Python), un generador de PDF con una paginación definida por especificación, firma
+XMLDSig con RSA-SHA256 y X.509, y un sistema de colas que reanuda envíos interrumpidos
+sin duplicar documentos. ~6.500 líneas de PHP.
+→ [Ficha](../proyectos/sifen-facturacion-electronica)
 
 ### Sistema de Gestión para Peluquería (2026, en producción)
 Aplicación web Laravel 13 de gestión integral y multisucursal —agenda, clientes,
-inventario, caja, facturación electrónica y portal de autogestión para el cliente—,
-desplegada en producción sobre Docker en un VPS con php-fpm, Caddy y HTTPS. La lógica
-de negocio vive en la base de datos: 85 tablas en 3FN, 51 funciones, 22 procedimientos
-almacenados, 17 triggers, 18 vistas y 93 restricciones CHECK, consumidas desde una
-capa de servicios propia en vez de reimplementarse en el ORM. Resuelve el reparto de
-una cita entre varios profesionales y varias personas, con bloqueo pesimista para que
-dos reservas simultáneas sobre el mismo horario dejen una sola cita. Emite facturas y
-notas de crédito electrónicas ante la DNIT. Incluye login biométrico WebAuthn escrito
-desde cero (decodificador CBOR, claves COSE y ASN.1/DER en PHP) y un motor de temas
-que deriva 42 tokens de color de un solo color elegido, verificando contraste WCAG.
+inventario, caja y portal de autogestión para el cliente—, desplegada en producción
+sobre Docker en un VPS con php-fpm, Caddy y HTTPS. La lógica de negocio vive en la
+base de datos: 85 tablas en 3FN, 51 funciones, 22 procedimientos almacenados, 17
+triggers, 18 vistas y 93 restricciones CHECK, consumidas desde una capa de servicios
+propia en vez de reimplementarse en el ORM. Resuelve el reparto de una cita entre
+varios profesionales y varias personas, con bloqueo pesimista para que dos reservas
+simultáneas sobre el mismo horario dejen una sola cita. Incluye login biométrico
+WebAuthn escrito desde cero (decodificador CBOR, claves COSE y ASN.1/DER en PHP) y un
+motor de temas que deriva 42 tokens de color de un solo color elegido, verificando
+contraste WCAG.
 240 pruebas automatizadas, incluidas pruebas de concurrencia con procesos en paralelo.
 Migré el sistema de PHP sin framework a Laravel 13 conservando el modelo de datos.
 Trabajo de Conclusión de Carrera, en pareja.
-→ [Ficha](../proyectos/sistema-gestion-peluqueria) ·
-[Sistema en producción](https://sgp.columbiatcc.online)
+→ [Ficha](../proyectos/sistema-gestion-peluqueria)
 
 ### Nexus — App Android (2026, en desarrollo)
 Aplicación Android en Kotlin y Jetpack Compose, con un solo código para móvil y
@@ -105,13 +104,14 @@ más lento. El reproductor salta solo entre enlaces alternativos y detecta un fa
 que ExoPlayer no reporta —vídeo H.264 10-bit que no renderiza— cayendo a libVLC.
 ~10.700 líneas de Kotlin. → [Ficha](../proyectos/nexus)
 
-### SIFEN Automatizador (2026)
-Versión simplificada del sistema anterior: el mismo motor fiscal sin interfaz ni base
-de datos, para que un comercio emita facturas electrónicas sin cambiar el software
-que ya usa. La integración es una carpeta donde deja archivos de texto. Corre como
-cron, como proceso vigilante o como contenedor Docker, y está integrado en producción
-con el Sistema de Gestión para Peluquería, para el que se amplió el formato de entrada
-conservando compatibilidad con los integradores anteriores.
+### Automatizador de integración (2026)
+Versión reducida del sistema anterior: el mismo motor de integración sin interfaz ni
+base de datos, para que un sistema de terceros lo use sin cambiar el software que ya
+tiene. La integración es una carpeta donde deja archivos de texto, un formato que se
+genera con un `printf` desde cualquier lenguaje. Corre como cron, como proceso
+vigilante o como contenedor Docker, y está integrado en producción con el Sistema de
+Gestión para Peluquería, para el que amplié el formato de entrada conservando
+compatibilidad con los integradores anteriores.
 → [Ficha](../proyectos/sifen-automatizador)
 
 ## Experiencia laboral
@@ -120,9 +120,10 @@ conservando compatibilidad con los integradores anteriores.
 ### Programador (pasantía), Vieloy Sistemas
 Abril 2026 – Mayo 2026 | Paraguay
 
-- Desarrollo del sistema de facturación electrónica SIFEN encargado por la empresa:
-  generación del XML según el Manual Técnico v150 de la DNIT, firma digital XMLDSig
-  y representación gráfica KuDE, en PHP sin dependencias externas.
+- Desarrollo del módulo de integración con una API SOAP del Estado paraguayo
+  encargado por la empresa: generación del XML según la especificación técnica
+  oficial, firma digital XMLDSig y generación del PDF asociado, en PHP sin
+  dependencias externas.
 - El proyecto se descartó del lado de la empresa y me autorizaron a conservarlo, por
   lo que su desarrollo continuó por mi cuenta hasta dejarlo funcional.
 

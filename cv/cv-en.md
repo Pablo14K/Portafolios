@@ -11,15 +11,14 @@ San Lorenzo, Paraguay · [GitHub](https://github.com/Pablo14K)
 
 ## Professional Summary
 
-Final-year Computer Engineering student, six months from graduating. I build
-electronic invoicing and management systems in PHP, Laravel and MySQL, and Android
-applications in Kotlin.
+Final-year Computer Engineering student, six months from graduating. I build web
+applications in PHP, Laravel and MySQL, and Android applications in Kotlin.
 
-I work well where requirements are strict and verifiable: I implemented Paraguay's
-SIFEN electronic invoicing regime —CDC, XML conforming to the official XSD, XMLDSig
-signing and KuDE— on plain PHP with no external dependencies, so it could be
-deployed on shared hosting. Where no library was available, I wrote what was
-missing: an ISO/IEC 18004 QR encoder, a PDF generator and an SMTP client.
+I work well where requirements are strict and verifiable: I implemented a complete
+integration against a Paraguayan government SOAP API, matching an official technical
+specification, on plain PHP with no external dependencies, so it could be deployed on
+shared hosting. Where no library was available, I wrote what was missing: an ISO/IEC
+18004 QR encoder, a PDF generator and an SMTP client.
 
 I apply the same standard to management software: my largest project is a
 multi-branch Laravel application running in production on Docker, with business logic
@@ -50,7 +49,6 @@ stack —database, server logic and interface— and keep growing as a developer
   no-JavaScript fallbacks, responsive design)
 - **Infrastructure:** Docker and Docker Compose, Caddy, Traefik, Apache, php-fpm,
   OPcache, cPanel, cron, Gradle, VPS and shared hosting deployment
-- **Domain:** SIFEN v150 electronic invoicing (Paraguayan tax authority)
 - **Tools:** Git, Android Studio, Claude Code, Codex, Antigravity
 
 **AI-assisted development.** I use Claude Code, Codex and Antigravity as a regular
@@ -60,31 +58,30 @@ generated goes through the test suite before it lands.
 
 ## Projects
 
-### SIFEN — Electronic Invoicing System (2026)
-Full electronic invoicing system for Paraguay's tax authority. I rewrote the engine
-to remove a Node.js microservice, leaving it 100% PHP and deployable on cPanel. It
-includes a custom ISO/IEC 18004 QR encoder (Reed-Solomon over GF(256), verified
-against Python's `qrcode` library), a PDF generator implementing the pagination rules
-of the v150 Technical Manual, XMLDSig signing with RSA-SHA256 and X.509, and a queue
-system that resumes interrupted deliveries without duplicating documents.
-~6,500 lines of PHP.
+### Government API Integration (2026)
+Integration system against a Paraguayan government SOAP API, matching an official
+technical specification that defines the exact XML structure, its signature and its
+printed representation. I rewrote the engine to remove a Node.js microservice, leaving
+it 100% PHP and deployable on cPanel. It includes a custom ISO/IEC 18004 QR encoder
+(Reed-Solomon over GF(256), verified against Python's `qrcode` library), a PDF
+generator implementing a specification-defined pagination, XMLDSig signing with
+RSA-SHA256 and X.509, and a queue system that resumes interrupted deliveries without
+duplicating documents. ~6,500 lines of PHP.
 
 ### Hair Salon Management System (2026, in production)
 Multi-branch Laravel 13 management web application —scheduling, clients, inventory,
-cash register, electronic invoicing and a customer self-service portal— deployed in
-production on Docker on a VPS with php-fpm, Caddy and HTTPS. Business logic lives in
-the database: 85 tables in 3NF, 51 functions, 22 stored procedures, 17 triggers, 18
+cash register and a customer self-service portal— deployed in production on Docker on
+a VPS with php-fpm, Caddy and HTTPS. Business logic lives in the database: 85 tables
+in 3NF, 51 functions, 22 stored procedures, 17 triggers, 18
 views and 93 CHECK constraints, consumed through a dedicated service layer rather than
 reimplemented in the ORM. It handles splitting one appointment across several
 professionals and several people, with pessimistic locking so two simultaneous
-bookings on the same slot leave exactly one appointment. It issues electronic invoices
-and credit notes to the Paraguayan tax authority. Includes biometric WebAuthn login
-written from scratch (CBOR decoder, COSE keys and ASN.1/DER in PHP) and a theming
+bookings on the same slot leave exactly one appointment. Includes biometric WebAuthn
+login written from scratch (CBOR decoder, COSE keys and ASN.1/DER in PHP) and a theming
 engine that derives 42 colour tokens from a single chosen colour, verifying WCAG
 contrast. 240 automated tests, including concurrency tests with parallel processes.
 I migrated the system from framework-less PHP to Laravel 13 while preserving the data
 model. Final-year thesis project, in a pair.
-→ [Live system](https://sgp.columbiatcc.online)
 
 ### Nexus — Android App (2026, in development)
 Android application in Kotlin and Jetpack Compose, sharing one codebase across phone
@@ -94,22 +91,23 @@ for the slowest. The player falls through alternative links automatically and de
 a failure ExoPlayer never reports —H.264 10-bit video that silently fails to
 render— by falling back to libVLC. ~10,700 lines of Kotlin.
 
-### SIFEN Automator (2026)
-A stripped-down version of the system above: the same tax engine with no interface
-and no database, so a business can issue electronic invoices without changing the
-software it already runs. Integration is a folder where it drops text files. Runs as
-a cron job, a watcher process or a Docker container, and is integrated in production
-with the Hair Salon Management System, for which the input format was extended while
-keeping backward compatibility with earlier integrators.
+### Integration Automator (2026)
+A stripped-down version of the system above: the same integration engine with no
+interface and no database, so a third-party system can use it without changing the
+software it already runs. Integration is a folder where it drops text files, a format
+any language can produce with a `printf`. Runs as a cron job, a watcher process or a
+Docker container, and is integrated in production with the Hair Salon Management
+System, for which I extended the input format while keeping backward compatibility
+with earlier integrators.
 
 ## Work Experience
 
 ### Programmer (Internship), Vieloy Sistemas
 April 2026 – May 2026 | Paraguay
 
-- Built the SIFEN electronic invoicing system commissioned by the company: XML
-  generation following the tax authority's v150 Technical Manual, XMLDSig digital
-  signing and KuDE graphical representation, in PHP with no external dependencies.
+- Built the government SOAP API integration module commissioned by the company: XML
+  generation following the official technical specification, XMLDSig digital signing
+  and generation of the associated PDF, in PHP with no external dependencies.
 - The company later dropped the project and authorised me to keep it, so I continued
   its development independently until it was functional.
 

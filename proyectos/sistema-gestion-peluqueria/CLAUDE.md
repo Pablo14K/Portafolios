@@ -1670,7 +1670,7 @@ Laravel lee un solo `.env`, así que lo compartido se repite:
 
 ### El servidor de producción: un VPS de Hostinger con Docker
 
-`https://sgp.columbiatcc.online`, VPS compartido con otros grupos, detrás de **Traefik** (la
+`https://sgp.tu-dominio.com`, VPS compartido con otros grupos, detrás de **Traefik** (la
 plantilla del panel, en modo host: sin red compartida ni puerto publicado). Los pasos están en
 `DESPLIEGUE.md` y `ACTUALIZAR.md`.
 

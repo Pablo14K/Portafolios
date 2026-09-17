@@ -1,6 +1,6 @@
 # Despliegue del SGP
 
-El sistema se publica en **`https://sgp.columbiatcc.online`**, sobre un **VPS de Hostinger
+El sistema se publica en **`https://sgp.tu-dominio.com`**, sobre un **VPS de Hostinger
 con Docker**. El dominio se compró entre varios grupos de la facultad, así que el SGP vive en
 un subdominio y **comparte el servidor con otros proyectos**: eso decide buena parte de lo que
 está escrito acá abajo.
@@ -37,7 +37,7 @@ Lo que sigue siendo trabajo, y es de lo que trata este documento:
 
 | Qué | Por qué |
 |---|---|
-| **Acceso al DNS de `columbiatcc.online`** | hay que crear un registro A. Si el dominio lo administra otro del grupo, es lo primero que hay que pedirle |
+| **Acceso al DNS de `tu-dominio.com`** | hay que crear un registro A. Si el dominio lo administra otro del grupo, es lo primero que hay que pedirle |
 | **La IP del VPS** | la da el panel de Hostinger |
 | **Acceso SSH como root** | todo lo demás se hace por ahí |
 | **SMTP saliente por el 587** | por ahí salen el código de verificación, la recuperación de contraseña, el segundo factor y los recordatorios. Si Hostinger lo bloquea, **una clienta nueva no puede terminar de registrarse** |
@@ -47,7 +47,7 @@ Lo que sigue siendo trabajo, y es de lo que trata este documento:
 
 ## 1. El DNS: que el subdominio llegue al VPS
 
-Un registro **A**, en el panel donde se administre `columbiatcc.online`:
+Un registro **A**, en el panel donde se administre `tu-dominio.com`:
 
 ```
 Tipo   Nombre   Valor              TTL
@@ -69,7 +69,7 @@ pagó:
 Y comprobarlo **antes de seguir**, porque el certificado depende de esto:
 
 ```bash
-dig +short sgp.columbiatcc.online
+dig +short sgp.tu-dominio.com
 ```
 
 Tiene que devolver la IP del VPS. **Si todavía no propagó, no sigas**: Traefik le pide el
@@ -197,7 +197,7 @@ Cinco etiquetas en el servicio `web` de `docker-compose.produccion.yml`, y nada 
 ```yaml
     labels:
       - traefik.enable=true
-      - traefik.http.routers.sgp.rule=Host(`sgp.columbiatcc.online`)
+      - traefik.http.routers.sgp.rule=Host(`sgp.tu-dominio.com`)
       - traefik.http.routers.sgp.entrypoints=websecure
       - traefik.http.routers.sgp.tls.certresolver=letsencrypt
       - traefik.http.services.sgp.loadbalancer.server.port=80
@@ -228,13 +228,13 @@ Tres cosas que se pagan caro si se cambian sin pensarlas:
 Desde la **Consola web**, sin depender del navegador ni del DNS:
 
 ```bash
-curl -sI -H 'Host: sgp.columbiatcc.online' http://127.0.0.1/ | head -3
+curl -sI -H 'Host: sgp.tu-dominio.com' http://127.0.0.1/ | head -3
 ```
 
 Tiene que contestar **308** hacia `https://`. Y después, ya con el certificado:
 
 ```bash
-curl -sI https://sgp.columbiatcc.online/ | head -3
+curl -sI https://sgp.tu-dominio.com/ | head -3
 ```
 
 **302 hacia `/entrar`** es lo correcto: el sistema manda al ingreso.
@@ -516,7 +516,7 @@ a medias con la configuración equivocada:
 APP_KEY=                 # se genera abajo
 MYSQL_ROOT_PASSWORD=     # una larga y al azar
 DB_PASSWORD=             # LA MISMA que la de arriba
-SGP_DOMINIO=sgp.columbiatcc.online
+SGP_DOMINIO=sgp.tu-dominio.com
 SGP_EMAIL_TLS=           # heredado de cuando Caddy sacaba el certificado; hoy lo hace Traefik
 MAIL_USERNAME=           # la cuenta de Gmail
 MAIL_PASSWORD=           # la contraseña de aplicación NUEVA
@@ -593,7 +593,7 @@ Tiene que terminar en **«Todo en orden.»**
 
 Después, a mano, y esto no se puede saltear:
 
-1. Abrir `https://sgp.columbiatcc.online` y ver que **el candado esté** (sin HTTPS no hay
+1. Abrir `https://sgp.tu-dominio.com` y ver que **el candado esté** (sin HTTPS no hay
    ingreso con huella).
 2. Entrar con `admin` y con `cliente`.
 3. Agendar una cita y ver que la agenda ofrezca horarios.
@@ -601,7 +601,7 @@ Después, a mano, y esto no se puede saltear:
    Es la comprobación que más veces salvó a este proyecto.
 5. Emitir un comprobante y ver el desglose del IVA.
 6. Pedir un código por correo (recuperar contraseña), comprobar **que llega** y que el enlace
-   del correo diga `https://sgp.columbiatcc.online`, no `localhost`.
+   del correo diga `https://sgp.tu-dominio.com`, no `localhost`.
 
 Y lo que le falta CARGAR al salón —que es otra pregunta— lo contesta:
 

@@ -82,7 +82,7 @@ docker exec sgp_app grep -m1 "'version'" config/sgp.php
 Tiene que decir la versión que acabás de subir. Y que el sitio responde:
 
 ```bash
-curl -sI https://sgp.columbiatcc.online/ | head -3
+curl -sI https://sgp.tu-dominio.com/ | head -3
 ```
 
 **302** hacia `/entrar` es lo correcto.

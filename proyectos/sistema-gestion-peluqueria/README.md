@@ -1,8 +1,8 @@
 # Sistema de Gestión para Peluquería
 
 > Sistema web de gestión integral para una peluquería de Luque (Paraguay): agenda,
-> clientes, inventario, caja, facturación electrónica ante la DNIT y portal de
-> autogestión para la clienta. Multisucursal, en producción sobre un VPS.
+> clientes, inventario, caja y portal de autogestión para la clienta. Multisucursal,
+> en producción sobre un VPS.
 
 | | |
 | --- | --- |
@@ -12,7 +12,6 @@
 | **Stack** | Laravel 13 · PHP 8.3 · MariaDB 10.4 · Bootstrap 5 · Docker · Caddy · WebAuthn |
 | **Versión** | 7.127.2 (16/09/2026) |
 | **Volumen** | ~31.000 líneas de PHP · ~21.000 de Blade · ~14.000 de pruebas · 85 tablas · 22 procedimientos · 51 funciones · 17 triggers · 18 vistas · 93 `CHECK` |
-| **Enlaces** | [Sistema en producción](https://sgp.columbiatcc.online) |
 
 > El proyecto se llama **SGP**. La grafía `SPG` sobrevive en el nombre del repositorio
 > y en esta carpeta del portafolio; internamente el código y la documentación usan SGP.
@@ -29,7 +28,8 @@ migró a Laravel 13**: la arquitectura cambió, las reglas no. La lógica de neg
 siguió viviendo donde estaba desde el principio, en la base de datos.
 
 Tres cosas excedieron el alcance declarado y se justificaron aparte en el documento:
-**multisucursal**, **facturación electrónica** e **integración con SIFEN**.
+**multisucursal**, el **módulo de comprobantes** y su **integración con una API del
+Estado**.
 
 ## Qué construí
 
@@ -42,7 +42,7 @@ niveles:
 | **Clientes** | registro, fidelización por niveles, canjes por puntos, valoraciones |
 | **Servicios** | catálogo, categorías, zonas del cuerpo, promociones |
 | **Inventario** | productos, stock por local, compras a crédito, proveedores |
-| **Facturación** | facturas y notas de crédito electrónicas, cobros, caja, cuentas bancarias, timbrados |
+| **Tesorería** | cobros, caja, arqueos, cuentas bancarias y emisión de comprobantes |
 | **Reportes** | siete informes con exportación a Excel y PDF |
 | **Seguridad** | usuarios, roles editables, auditoría |
 | **Personal** | profesionales, turnos, asistencia por fichaje, comisiones |
@@ -112,16 +112,16 @@ fecha_hora)` no servía: hay canceladas y solapes parciales.
 exige que quede una sola cita. `ConcurrenciaCobroTest` hace lo mismo con 3 cobros de
 la misma factura, 3 aperturas de la misma caja y 3 salidas del mismo stock.
 
-### Facturación electrónica ante la DNIT paraguaya
+### Integración con una API del Estado, en dos pasos desacoplados
 
-El SGP emite el comprobante ya numerado —timbrado de 8 dígitos, establecimiento y
-punto de expedición de 3, correlativo de 7— y se lo pasa al
-[Automatizador SIFEN](../sifen-automatizador) por HTTP. **Emitir y declarar son dos
-pasos**: la factura es válida al emitirse, y el envío sale seguido pero no atado; si
-falla queda `PENDIENTE` y se reintenta desde el comprobante.
+El módulo de comprobantes numera el documento según una especificación oficial —ocho
+dígitos de autorización, tres de establecimiento, tres de punto de expedición y siete
+de correlativo— y se lo pasa al [Automatizador](../sifen-automatizador) por HTTP.
+**Emitir y declarar son dos pasos**: el documento es válido al emitirse, y el envío
+sale seguido pero no atado; si falla queda `PENDIENTE` y se reintenta.
 
 - El **timbrado es por tipo de comprobante y por sucursal**, y cae al de otra sede si
-  el local no tiene el suyo: dejar de facturar sería peor, y la pantalla lo dice.
+  el local no tiene el suyo: dejar de emitir sería peor, y la pantalla lo dice.
 - Los datos del receptor se piden **antes** de emitir, porque un rechazo no se
   reintenta: el número ya se gastó. El DV del RUC se valida por módulo 11 con pesos
   2..11.
@@ -289,7 +289,7 @@ justificadas en `docs/Herramientas_extras_utilizadas.docx`.
 | **Caddy · Traefik** | Servidor y TLS en producción | Extra |
 | **Dompdf** | PDF de comprobantes e informes | Extra |
 | **WebAuthn / FIDO2** | Login biométrico, implementado a mano | Extra, opcional |
-| **SIFEN (DNIT)** | Facturación electrónica | Extra, justificado |
+| **Integración con API del Estado** | Emisión de comprobantes declarados | Extra, justificado |
 | **Claude Code · Codex · Antigravity** | Asistencia en desarrollo | — |
 
 Sin Node.js y sin paso de compilación: Bootstrap viene por CDN y el CSS y el JS
