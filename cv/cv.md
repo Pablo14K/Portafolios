@@ -16,8 +16,8 @@ Estudiante de Ingeniería en Informática en último año, a seis meses de titul
 Construyo aplicaciones web en PHP, Laravel y MySQL, y aplicaciones Android en Kotlin.
 
 Trabajo cómodo cuando el requisito es estricto y verificable: implementé una
-integración completa contra una API SOAP del Estado paraguayo, ajustada a una
-especificación técnica oficial, sobre PHP nativo y sin dependencias externas, para que
+integración completa contra SIFEN, la API SOAP de la DNIT paraguaya, ajustada al
+Manual Técnico oficial v150, sobre PHP nativo y sin dependencias externas, para que
 pudiera desplegarse en hosting compartido. Cuando no había librería disponible,
 escribí lo que faltaba: un codificador QR conforme a ISO/IEC 18004, un generador de
 PDF y un cliente SMTP.
@@ -68,9 +68,9 @@ mías, y todo lo generado pasa por la batería de pruebas antes de entrar.
 ## Proyectos
 
 
-### Integración con API del Estado paraguayo (2026)
-Sistema de integración contra una API SOAP de un organismo del Estado, ajustado a una
-especificación técnica oficial que define la estructura exacta del XML, su firma y su
+### SIFEN — Integración con API del Estado paraguayo (2026)
+Sistema de integración contra SIFEN, la API SOAP de la DNIT paraguaya, ajustado al
+Manual Técnico oficial v150, que define la estructura exacta del XML, su firma y su
 representación gráfica. Reescribí el motor eliminando un microservicio Node.js para
 dejarlo 100% PHP y desplegable en cPanel. Incluye un codificador QR propio conforme a
 ISO/IEC 18004 (Reed-Solomon sobre GF(256), validado contra la librería `qrcode` de
@@ -90,8 +90,8 @@ varios profesionales y varias personas, con bloqueo pesimista para que dos reser
 simultáneas sobre el mismo horario dejen una sola cita. Incluye login biométrico
 WebAuthn escrito desde cero (decodificador CBOR, claves COSE y ASN.1/DER en PHP) y un
 motor de temas que deriva 42 tokens de color de un solo color elegido, verificando
-contraste WCAG.
-240 pruebas automatizadas, incluidas pruebas de concurrencia con procesos en paralelo.
+contraste WCAG. 240 pruebas automatizadas, incluidas pruebas de concurrencia con
+procesos en paralelo.
 Migré el sistema de PHP sin framework a Laravel 13 conservando el modelo de datos.
 Trabajo de Conclusión de Carrera, en pareja.
 → [Ficha](../proyectos/sistema-gestion-peluqueria)
@@ -104,14 +104,14 @@ más lento. El reproductor salta solo entre enlaces alternativos y detecta un fa
 que ExoPlayer no reporta —vídeo H.264 10-bit que no renderiza— cayendo a libVLC.
 ~10.700 líneas de Kotlin. → [Ficha](../proyectos/nexus)
 
-### Automatizador de integración (2026)
-Versión reducida del sistema anterior: el mismo motor de integración sin interfaz ni
-base de datos, para que un sistema de terceros lo use sin cambiar el software que ya
-tiene. La integración es una carpeta donde deja archivos de texto, un formato que se
-genera con un `printf` desde cualquier lenguaje. Corre como cron, como proceso
-vigilante o como contenedor Docker, y está integrado en producción con el Sistema de
-Gestión para Peluquería, para el que amplié el formato de entrada conservando
-compatibilidad con los integradores anteriores.
+### Automatizador SIFEN (2026)
+Versión reducida del sistema anterior: el mismo motor de integración SIFEN sin
+interfaz ni base de datos, para que un sistema de terceros lo use sin cambiar el
+software que ya tiene. La integración es una carpeta donde deja archivos de texto, un
+formato que se genera con un `printf` desde cualquier lenguaje. Corre como cron, como
+proceso vigilante o como contenedor Docker, y está integrado en producción con el
+Sistema de Gestión para Peluquería, para el que amplié el formato de entrada
+conservando compatibilidad con los integradores anteriores.
 → [Ficha](../proyectos/sifen-automatizador)
 
 ## Experiencia laboral
@@ -120,10 +120,10 @@ compatibilidad con los integradores anteriores.
 ### Programador (pasantía), Vieloy Sistemas
 Abril 2026 – Mayo 2026 | Paraguay
 
-- Desarrollo del módulo de integración con una API SOAP del Estado paraguayo
-  encargado por la empresa: generación del XML según la especificación técnica
-  oficial, firma digital XMLDSig y generación del PDF asociado, en PHP sin
-  dependencias externas.
+- Desarrollo del módulo de integración con SIFEN, la API SOAP de la DNIT paraguaya,
+  encargado por la empresa: generación del XML según el Manual Técnico oficial v150,
+  firma digital XMLDSig y generación del PDF asociado, en PHP sin dependencias
+  externas.
 - El proyecto se descartó del lado de la empresa y me autorizaron a conservarlo, por
   lo que su desarrollo continuó por mi cuenta hasta dejarlo funcional.
 

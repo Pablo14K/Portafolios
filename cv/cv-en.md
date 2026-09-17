@@ -15,10 +15,10 @@ Final-year Computer Engineering student, six months from graduating. I build web
 applications in PHP, Laravel and MySQL, and Android applications in Kotlin.
 
 I work well where requirements are strict and verifiable: I implemented a complete
-integration against a Paraguayan government SOAP API, matching an official technical
-specification, on plain PHP with no external dependencies, so it could be deployed on
-shared hosting. Where no library was available, I wrote what was missing: an ISO/IEC
-18004 QR encoder, a PDF generator and an SMTP client.
+integration against SIFEN, the Paraguayan tax authority's SOAP API, matching its
+official v150 Technical Manual, on plain PHP with no external dependencies, so it
+could be deployed on shared hosting. Where no library was available, I wrote what was
+missing: an ISO/IEC 18004 QR encoder, a PDF generator and an SMTP client.
 
 I apply the same standard to management software: my largest project is a
 multi-branch Laravel application running in production on Docker, with business logic
@@ -58,13 +58,14 @@ generated goes through the test suite before it lands.
 
 ## Projects
 
-### Government API Integration (2026)
-Integration system against a Paraguayan government SOAP API, matching an official
-technical specification that defines the exact XML structure, its signature and its
-printed representation. I rewrote the engine to remove a Node.js microservice, leaving
-it 100% PHP and deployable on cPanel. It includes a custom ISO/IEC 18004 QR encoder
-(Reed-Solomon over GF(256), verified against Python's `qrcode` library), a PDF
-generator implementing a specification-defined pagination, XMLDSig signing with
+### SIFEN — Government API Integration (2026)
+Integration system against SIFEN, the Paraguayan tax authority's SOAP API, matching
+its official v150 Technical Manual, which defines the exact XML structure, its
+signature and its printed representation. I rewrote the engine to remove a Node.js
+microservice, leaving it 100% PHP and deployable on cPanel. It includes a custom
+ISO/IEC 18004 QR encoder (Reed-Solomon over GF(256), verified against Python's
+`qrcode` library), a PDF generator implementing a specification-defined pagination,
+XMLDSig signing with
 RSA-SHA256 and X.509, and a queue system that resumes interrupted deliveries without
 duplicating documents. ~6,500 lines of PHP.
 
@@ -91,9 +92,9 @@ for the slowest. The player falls through alternative links automatically and de
 a failure ExoPlayer never reports —H.264 10-bit video that silently fails to
 render— by falling back to libVLC. ~10,700 lines of Kotlin.
 
-### Integration Automator (2026)
-A stripped-down version of the system above: the same integration engine with no
-interface and no database, so a third-party system can use it without changing the
+### SIFEN Automator (2026)
+A stripped-down version of the system above: the same SIFEN integration engine with
+no interface and no database, so a third-party system can use it without changing the
 software it already runs. Integration is a folder where it drops text files, a format
 any language can produce with a `printf`. Runs as a cron job, a watcher process or a
 Docker container, and is integrated in production with the Hair Salon Management
@@ -105,9 +106,10 @@ with earlier integrators.
 ### Programmer (Internship), Vieloy Sistemas
 April 2026 – May 2026 | Paraguay
 
-- Built the government SOAP API integration module commissioned by the company: XML
-  generation following the official technical specification, XMLDSig digital signing
-  and generation of the associated PDF, in PHP with no external dependencies.
+- Built the SIFEN integration module commissioned by the company: XML generation
+  following the tax authority's official v150 Technical Manual, XMLDSig digital
+  signing and generation of the associated PDF, in PHP with no external
+  dependencies.
 - The company later dropped the project and authorised me to keep it, so I continued
   its development independently until it was functional.
 

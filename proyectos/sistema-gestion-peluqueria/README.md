@@ -28,8 +28,7 @@ migró a Laravel 13**: la arquitectura cambió, las reglas no. La lógica de neg
 siguió viviendo donde estaba desde el principio, en la base de datos.
 
 Tres cosas excedieron el alcance declarado y se justificaron aparte en el documento:
-**multisucursal**, el **módulo de comprobantes** y su **integración con una API del
-Estado**.
+**multisucursal**, el **módulo de comprobantes** y su **integración con SIFEN**.
 
 ## Qué construí
 
@@ -112,11 +111,12 @@ fecha_hora)` no servía: hay canceladas y solapes parciales.
 exige que quede una sola cita. `ConcurrenciaCobroTest` hace lo mismo con 3 cobros de
 la misma factura, 3 aperturas de la misma caja y 3 salidas del mismo stock.
 
-### Integración con una API del Estado, en dos pasos desacoplados
+### Integración con SIFEN, en dos pasos desacoplados
 
-El módulo de comprobantes numera el documento según una especificación oficial —ocho
-dígitos de autorización, tres de establecimiento, tres de punto de expedición y siete
-de correlativo— y se lo pasa al [Automatizador](../sifen-automatizador) por HTTP.
+El módulo de comprobantes numera el documento según el Manual Técnico v150 de la DNIT
+—ocho dígitos de autorización, tres de establecimiento, tres de punto de expedición y
+siete de correlativo— y se lo pasa al
+[Automatizador SIFEN](../sifen-automatizador) por HTTP.
 **Emitir y declarar son dos pasos**: el documento es válido al emitirse, y el envío
 sale seguido pero no atado; si falla queda `PENDIENTE` y se reintenta.
 
@@ -289,7 +289,7 @@ justificadas en `docs/Herramientas_extras_utilizadas.docx`.
 | **Caddy · Traefik** | Servidor y TLS en producción | Extra |
 | **Dompdf** | PDF de comprobantes e informes | Extra |
 | **WebAuthn / FIDO2** | Login biométrico, implementado a mano | Extra, opcional |
-| **Integración con API del Estado** | Emisión de comprobantes declarados | Extra, justificado |
+| **SIFEN (DNIT)** | Emisión de comprobantes declarados ante el Estado | Extra, justificado |
 | **Claude Code · Codex · Antigravity** | Asistencia en desarrollo | — |
 
 Sin Node.js y sin paso de compilación: Bootstrap viene por CDN y el CSS y el JS
