@@ -84,7 +84,7 @@ engine that derives 42 colour tokens from a single chosen colour, verifying WCAG
 contrast. 240 automated tests, including concurrency tests with parallel processes.
 I migrated the system from framework-less PHP to Laravel 13 while preserving the data
 model. Final-year thesis project, in a pair.
-→ [Repository](https://github.com/Pablo14K/SPG)
+→ [Live system](https://sgp.columbiatcc.online)
 
 ### Nexus — Android App (2026, in development)
 Android application in Kotlin and Jetpack Compose, sharing one codebase across phone

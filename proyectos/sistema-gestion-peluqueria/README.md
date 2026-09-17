@@ -12,7 +12,7 @@
 | **Stack** | Laravel 13 · PHP 8.3 · MariaDB 10.4 · Bootstrap 5 · Docker · Caddy · WebAuthn |
 | **Versión** | 7.127.2 (16/09/2026) |
 | **Volumen** | ~31.000 líneas de PHP · ~21.000 de Blade · ~14.000 de pruebas · 85 tablas · 22 procedimientos · 51 funciones · 17 triggers · 18 vistas · 93 `CHECK` |
-| **Enlaces** | [Repositorio](https://github.com/Pablo14K/SPG) · [Sistema en producción](https://sgp.columbiatcc.online) |
+| **Enlaces** | [Sistema en producción](https://sgp.columbiatcc.online) |
 
 > El proyecto se llama **SGP**. La grafía `SPG` sobrevive en el nombre del repositorio
 > y en esta carpeta del portafolio; internamente el código y la documentación usan SGP.
@@ -223,11 +223,7 @@ comando correr.
 
 ## Estructura
 
-> **El código vive en [github.com/Pablo14K/SPG](https://github.com/Pablo14K/SPG),
-> que es público.** Esta carpeta es la ficha, no una copia: una copia se
-> desactualiza en silencio y termina contando otra cosa que el original —que es
-> exactamente lo que pasó con la versión anterior a esta, que siguió mostrando el
-> MVC escrito a mano meses después de la migración a Laravel.
+Así está organizado el proyecto:
 
 ```
 app/
@@ -273,9 +269,10 @@ docker compose exec app php artisan test              # las 240 pruebas
 docker compose exec app php artisan sgp:diagnostico   # la revisión del entorno
 ```
 
-El repositorio principal tiene además el historial completo de versiones
-(`HISTORIAL.md`, una fila por versión con el porqué de cada cambio), la
-documentación técnica, las guías de despliegue y los bancos de simulación.
+El proyecto mantiene además un historial completo de versiones —una fila por versión
+con el porqué de cada cambio, qué estaba mal y qué se decidió no hacer—, la
+documentación técnica, las guías de despliegue y actualización, y los bancos de
+simulación con su informe de QA.
 
 ## Herramientas utilizadas
 

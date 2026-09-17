@@ -95,7 +95,7 @@ que deriva 42 tokens de color de un solo color elegido, verificando contraste WC
 Migré el sistema de PHP sin framework a Laravel 13 conservando el modelo de datos.
 Trabajo de Conclusión de Carrera, en pareja.
 → [Ficha](../proyectos/sistema-gestion-peluqueria) ·
-[Repositorio](https://github.com/Pablo14K/SPG)
+[Sistema en producción](https://sgp.columbiatcc.online)
 
 ### Nexus — App Android (2026, en desarrollo)
 Aplicación Android en Kotlin y Jetpack Compose, con un solo código para móvil y
