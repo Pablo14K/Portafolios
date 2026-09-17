@@ -15,7 +15,7 @@ use RuntimeException;
  *
  *   FAC|estab|punto|numero|fecha|condicion|moneda
  *   CLI|tipo|documento|nombre|email|direccion|telefono
- *   ITM|codigo|descripcion|cantidad|precio_unitario|iva       (repetible)
+ *   ITM|codigo|descripcion|cantidad|precio_unitario|iva[|precio_lista]   (repetible)
  *   PAG|tipo                                                  (repetible; el monto lo calcula el sistema)
  *
  *   condicion: 1=contado, 2=crédito
@@ -52,6 +52,33 @@ final class TxtParser
             $tipo = strtoupper((string)($campos[0] ?? ''));
 
             switch ($tipo) {
+                // EMI: quien emite. Lo manda el SGP desde la 7.52.0.
+                //
+                // **Es opcional y esa es la gracia**: sin esta linea se usan
+                // los datos de config/.env, asi que un .txt viejo o de otro
+                // sistema sigue funcionando igual. Cuando viene, gana, porque
+                // el emisor cambia con la sucursal —la direccion y el timbrado
+                // son los del local que atendio— y eso el .env no lo puede
+                // expresar con un solo juego de valores.
+                case 'EMI':
+                    $actual['emi'] = [
+                        'razon_social'   => $campos[1] ?? '',
+                        'ruc'            => $campos[2] ?? '',
+                        'dv'             => $campos[3] ?? '',
+                        'direccion'      => $campos[4] ?? '',
+                        'ciudad'         => $campos[5] ?? '',
+                        'telefono'       => $campos[6] ?? '',
+                        'email'          => $campos[7] ?? '',
+                        'actividad_cod'  => $campos[8] ?? '',
+                        'actividad_desc' => $campos[9] ?? '',
+                        'timbrado'       => $campos[10] ?? '',
+                        'timbrado_ini'   => $campos[11] ?? '',
+                        'timbrado_fin'   => $campos[12] ?? '',
+                        'sucursal'       => $campos[13] ?? '',
+                    ];
+                    $tieneDatos = true;
+                    break;
+
                 case 'FAC':
                     $actual['fac'] = [
                         'establecimiento' => $campos[1] ?? '',
@@ -60,6 +87,10 @@ final class TxtParser
                         'fecha'           => $campos[4] ?? '',
                         'condicion'       => $campos[5] ?? '1',
                         'moneda'          => strtoupper($campos[6] ?? 'PYG'),
+                        // D011 iTipTra. Ausente = 1 (venta de mercaderia),
+                        // que es como se comportaba antes de que el SGP lo
+                        // mandara: un .txt viejo no cambia de significado.
+                        'tipo_transaccion' => $campos[7] ?? '',
                     ];
                     $tieneDatos = true;
                     break;
@@ -83,6 +114,17 @@ final class TxtParser
                         'cantidad'        => $campos[3] ?? '0',
                         'precio_unitario' => $campos[4] ?? '0',
                         'iva'             => $campos[5] ?? '10',
+                        // **Campo opcional: el precio de LISTA.** El campo 5 trae
+                        // el neto —el emisor reparte el descuento de la venta
+                        // entre los renglones antes de mandarlo, porque el total
+                        // lo calcula este sistema sumándolos— y la diferencia
+                        // entre los dos es el descuento del renglón, que
+                        // `InvoiceFactory` convierte en `descuento_item`: el XML
+                        // lo declara (E721 lista, EA002 descuento, EA008 neto) y
+                        // el KuDE lo imprime en su columna. Si no viene, cae en
+                        // el neto y no hay descuento — que es exactamente el
+                        // comportamiento anterior, con el mismo total.
+                        'precio_lista'    => $campos[6] ?? ($campos[4] ?? '0'),
                     ];
                     $tieneDatos = true;
                     break;
@@ -97,7 +139,7 @@ final class TxtParser
                     break;
 
                 default:
-                    throw new RuntimeException("Línea $nLinea: tipo de registro desconocido '$tipo' (esperado FAC/CLI/ITM/PAG/===).");
+                    throw new RuntimeException("Línea $nLinea: tipo de registro desconocido '$tipo' (esperado EMI/FAC/CLI/ITM/PAG/===).");
             }
         }
 

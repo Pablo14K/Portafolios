@@ -82,6 +82,12 @@ final class InvoiceMapper
                 'email' => (string) $emitter['email'],
                 'codigo_actividad_economica' => (string) $emitter['codigo_actividad_economica'],
                 'descripcion_actividad_economica' => (string) $emitter['descripcion_actividad_economica'],
+                // Del local que emitio. **Son para el KuDE, no para el XML**:
+                // la DNIT valida la ciudad contra su tabla de codigos y el
+                // sistema de origen manda texto, asi que el codigo sigue
+                // siendo el del .env y estos dos solo se imprimen.
+                'sucursal_nombre' => (string) ($emitter['sucursal_nombre'] ?? ''),
+                'sucursal_ciudad' => (string) ($emitter['sucursal_ciudad'] ?? ''),
                 'timbrado_numero' => (string) $emitter['timbrado_numero'],
                 'timbrado_inicio' => (string) $emitter['timbrado_inicio'],
                 'timbrado_fin' => (string) $emitter['timbrado_fin'],

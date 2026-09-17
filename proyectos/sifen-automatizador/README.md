@@ -8,10 +8,11 @@
 | --- | --- |
 | **Rol** | Desarrollo backend |
 | **Periodo** | 2026 |
-| **Stack** | PHP 8.1 · cron / watcher · Apache · cPanel |
-| **Volumen** | ~4.000 líneas de PHP |
+| **Stack** | PHP 8.1 · cron / watcher · Apache · cPanel · Docker |
+| **Volumen** | ~4.300 líneas de PHP |
 | **Origen** | Derivado del [sistema principal](../sifen-facturacion-electronica), encargado en una pasantía en Vieloy Sistemas y conservado con autorización de la empresa |
 | **Relación** | Versión simplificada del [sistema de facturación completo](../sifen-facturacion-electronica), del que reutiliza el motor fiscal |
+| **Integrado en** | [Sistema de Gestión para Peluquería](../sistema-gestion-peluqueria), que lo usa en producción como servicio de facturación electrónica |
 
 ## Contexto
 
@@ -62,9 +63,10 @@ bloque. Es un formato que se escribe con un `printf` desde cualquier lenguaje, s
 librerías:
 
 ```text
-FAC|establecimiento|punto|numero|fecha|condicion|moneda
+EMI|razon_social|ruc|dv|direccion|ciudad|telefono|email|act_cod|act_desc|timbrado|desde|hasta|sucursal
+FAC|establecimiento|punto|numero|fecha|condicion|moneda|tipo_transaccion
 CLI|tipo|documento|nombre|email|direccion|telefono
-ITM|codigo|descripcion|cantidad|precio_unitario|iva
+ITM|codigo|descripcion|cantidad|precio_unitario|iva[|precio_lista]
 PAG|tipo|monto
 ===
 ```
@@ -72,6 +74,40 @@ PAG|tipo|monto
 `TxtParser` lo valida campo a campo antes de construir nada, de modo que un archivo
 mal formado se rechaza con un mensaje concreto en `errores/` en vez de producir un
 XML inválido que la DNIT devolvería con un código críptico.
+
+**Todo lo que se agregó es opcional, y esa es la regla del formato**: un `.txt`
+escrito contra la versión anterior sigue significando exactamente lo mismo. Sin
+`EMI|` se usan los datos del `.env`; sin `tipo_transaccion` vale 1 (venta de
+mercadería), que era el valor fijo de antes; sin `precio_lista` el precio de lista es
+el neto y el descuento del renglón es cero. Un integrador viejo no tiene que tocar
+nada.
+
+### El emisor puede venir en el archivo, porque no siempre es uno solo
+
+`EMI|` existe porque el `.env` no puede expresar un emisor que cambia. Cuando quien
+integra tiene **varias sucursales**, la dirección y el timbrado son los del local que
+atendió, no los de la empresa: con un solo juego de valores en el archivo de
+configuración, el KuDE salía a nombre del emisor de ejemplo. Si la línea viene, gana;
+si no, se cae al `.env` como siempre.
+
+### El descuento, declarado como lo modela el SIFEN
+
+El campo 5 del `ITM` trae el **neto** —quien emite reparte su descuento entre los
+renglones antes de mandar, porque el total lo suma este sistema— y el campo 7
+opcional, el **precio de lista**. La diferencia es el descuento del renglón.
+
+Hasta acá el precio de lista era «sólo para el KuDE» y el XML declaraba el neto como
+precio unitario, sin descuento. Era válido, pero **el KuDE es la representación
+gráfica del XML y decían cosas distintas**. Ahora los dos declaran precio, descuento
+y total: E721 el precio de lista, EA002 el descuento particular, EA003 su porcentaje
+y EA008 el neto por cantidad.
+
+Al hacerlo salió a la luz un error que el descuento en cero tapaba: **E727
+`dTotBruOpeItem` se estaba calculando desde el neto y restándole el descuento otra
+vez**. Con descuento no se notaba en las pruebas porque no había descuentos; con
+descuento real, el total del ítem salía descontado dos veces. E727 es el bruto
+—precio de lista × cantidad— y EA008 el neto, y ahora cada uno sale de donde
+corresponde.
 
 ### Dos modos de ejecución, según dónde se despliegue
 
@@ -94,6 +130,17 @@ Para los sistemas que prefieren empujar la factura en lugar de escribir en disco
 `public/index.php` expone un endpoint que acepta el mismo formato `.txt` por HTTP,
 autenticado con un token compartido. `public/descargar.php` permite recuperar
 después el XML y el PDF resultantes.
+
+### Quién manda el comprobante por correo se decide en cada petición
+
+Con los dos sistemas mandando, la clienta recibe el comprobante **dos veces desde
+direcciones distintas**, y cambiar la cuenta de correo en un lado arregla la mitad
+del problema. Antes eso dependía de acordarse de dejar `MAIL_FROM_EMAIL` vacío en la
+configuración; ahora quien emite lo dice en la petición con una cabecera
+`X-SGP-Correo: no`, y sin ella el comportamiento es el de siempre.
+
+Es una decisión de integración, no de configuración: la toma quien conoce el
+contexto, no el archivo que alguien editó hace seis meses.
 
 ### Procesamiento idempotente
 
@@ -130,6 +177,26 @@ Hereda los tres modos del sistema principal: `mock` (genera y aprueba localmente
 sin valor fiscal), `test` (homologación de la DNIT) y `prod` (producción). El modo
 `mock` permite que un integrador pruebe su lado sin tener aún un certificado.
 
+## En producción: integrado con el SGP
+
+El [Sistema de Gestión para Peluquería](../sistema-gestion-peluqueria) es el primer
+integrador real, y lo usa como **un contenedor más de su despliegue**. Eso obligó a
+cerrar cosas que en un cPanel quedaban al criterio de quien instalaba:
+
+- **Se configura por variables del compose, no por un `.env` dentro del contenedor**:
+  un archivo adentro no sobrevive al despliegue, y `bootstrap.php` caía en
+  `.env.example` sin avisar, así que el KuDE salía a nombre de la empresa de ejemplo.
+- **El certificado va en un volumen con nombre**, fuera de la imagen. Si la carpeta no
+  está, el contenedor se apaga a propósito: un 404 del endpoint se habría interpretado
+  como comprobante rechazado.
+- **Los dos sistemas no hablan por disco sino por HTTP**, y no se fusionó código: el
+  SGP escribe el mismo `.txt` y lo manda al endpoint. Una corrección de las reglas de
+  la DNIT sigue aplicándose en un solo sitio.
+
+El KuDE también se volvió configurable en lo visual: la DNIT no impone diseño, así
+que la banda y la regla de la tabla toman la paleta de quien emite. Los colores son
+constantes en `KudeService` y no dependen de ninguna hoja de estilos.
+
 ## Herramientas utilizadas
 
 | Herramienta | Para qué |
@@ -138,8 +205,9 @@ sin valor fiscal), `test` (homologación de la DNIT) y `prod` (producción). El 
 | **Motor fiscal propio** (`motor/`) | CDC, XML v150, XMLDSig, QR y KuDE, heredados del sistema principal |
 | **cron** | Ejecución periódica en hosting compartido |
 | **Apache / cPanel** | Despliegue y endpoint HTTP |
+| **Docker** | Despliegue como servicio junto al sistema que lo integra |
 | **Bash** | Scripts de arranque y parada del watcher |
-| **Claude Code** | Asistencia en desarrollo |
+| **Claude Code · Codex · Antigravity** | Asistencia en desarrollo |
 
 Sin Composer ni dependencias externas, igual que el sistema principal: es requisito
 para poder desplegarlo en un cPanel sin acceso a consola.
@@ -151,6 +219,7 @@ para poder desplegarlo en un cPanel sin acceso a consola.
 
 ## Pendiente de completar
 
-- [ ] Confirmar si se integró con un sistema de terceros en producción y cuál
+- [x] Confirmar si se integró con un sistema de terceros en producción y cuál —
+      el [SGP](../sistema-gestion-peluqueria), desde agosto de 2026
 - [ ] Resultado medible: facturas procesadas por día, tiempo medio por documento
 - [ ] Captura del ciclo completo: `.txt` de entrada y KuDE resultante

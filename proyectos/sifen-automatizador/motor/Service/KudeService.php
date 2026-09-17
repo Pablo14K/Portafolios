@@ -33,6 +33,29 @@ final class KudeService
     private const MARGIN = 28.0;
     private const ROW_H  = 18.0;   // alto de cada fila de ítem
 
+    /*
+     * Paleta del sistema que emite, en el espacio de color de PDF (0..1).
+     *
+     * **La DNIT no impone diseno al KuDE.** El capitulo 13 del Manual
+     * Tecnico v150 fija QUE datos tienen que estar y que se lea que es la
+     * representacion grafica de un documento electronico, no como se ve.
+     * Lo obligatorio —CDC, QR, la leyenda del XML, la consulta en
+     * ekuatia, el timbrado, el numero— queda intacto; lo que cambia es el
+     * color y la jerarquia.
+     *
+     * El acento va SOLO donde hay jerarquia: la banda del titulo y la regla
+     * bajo el encabezado de la tabla. Puesto en todos lados pierde el
+     * efecto, que es la regla que el sistema sigue en pantalla.
+     *
+     * Es el verde agua de la identidad del SGP desde la 7.123.0 (hasta ahi
+     * era el oro champagne). El texto de la banda paso de negro a BLANCO: el
+     * oro era claro y el verde es oscuro.
+     */
+    private const ACENTO = '0.102 0.420 0.373';   // #1A6B5F
+    private const NEGRO  = '0.051 0.051 0.051';   // #0D0D0D
+    private const BLANCO = '1 1 1';               // #FFFFFF
+    private const FONDO  = '0.949 0.984 0.976';   // #F2FBF9
+
     public function __construct(private string $outputDir)
     {
     }
@@ -76,7 +99,7 @@ final class KudeService
         // Tope de tabla = margen + encabezado(80) + separación(3) + banda título(14) + receptor(55) = 152.
         $rowsTop     = self::PAGE_H - self::MARGIN - 152.0 - 24.0;               // bajo la cabecera de la tabla
         $qrTop       = self::MARGIN + 14.0 + 90.0;                               // techo de la zona QR/CDC (anclada al pie)
-        $totalsH     = 5 * self::ROW_H;                                          // SUBTOTAL+DESCUENTO+TOTAL+letras+IVA
+        $totalsH     = 4 * self::ROW_H;                                          // SUBTOTAL+TOTAL+letras+IVA
         $perPage     = (int) floor(($rowsTop - $qrTop) / self::ROW_H);           // filas en páginas de continuación
         $perPageLast = (int) floor(($rowsTop - $qrTop - $totalsH) / self::ROW_H); // la última reserva lugar a totales
 
@@ -197,6 +220,37 @@ final class KudeService
             );
         };
 
+        // Como `$numberCell`, pero centrada: es lo que se pidió para las
+        // columnas 5% y 10%, cabecera y valores.
+        $centerCell = function (string $txt, float $cellX, float $ty, float $cellW, float $sz = 7.5, bool $bold = false) use (&$stream, $esc, $estimateTextWidth): void {
+            if ($txt === '') {
+                return;
+            }
+
+            $pad = 2.0;
+            $safety = 1.08;
+            $available = max(1.0, $cellW - ($pad * 2));
+            $estimatedWidth = $estimateTextWidth($txt, $sz, $bold);
+            $scale = min(100.0, ($available / ($estimatedWidth * $safety)) * 100.0);
+            $safeDrawnWidth = $estimatedWidth * $safety * ($scale / 100.0);
+            $tx = $cellX + ($cellW - $safeDrawnWidth) / 2;
+            $font = $bold ? '/F2' : '/F1';
+
+            $stream .= sprintf(
+                "q %.2f %.2f %.2f %.2f re W n BT 0 0 0 rg %s %.1f Tf %.2f Tz %.2f %.2f Td (%s) Tj ET Q 0 0 0 rg\n",
+                $cellX,
+                $ty - $sz - 4,
+                $cellW,
+                ($sz * 2) + 8,
+                $font,
+                $sz,
+                $scale,
+                $tx,
+                $ty,
+                $esc($txt)
+            );
+        };
+
         $fitTextCell = function (string $txt, float $cellX, float $ty, float $cellW, float $sz = 8.0, bool $bold = false) use (&$stream, $esc, $estimateTextWidth): void {
             if ($txt === '') {
                 return;
@@ -238,10 +292,29 @@ final class KudeService
 
         $razonSocial = (string) ($em['razon_social_original'] ?? $em['razon_social']);
         $text($razonSocial, $exl, $ey, 11, true);
-        $text('Dirección: ' . $em['direccion'] . ' N° ' . $em['numero_casa'], $exl, $ey - 13, 8);
-        $text('Ciudad: ' . $em['descripcion_ciudad'], $exl, $ey - 23, 8);
+        // **El numero de casa del .env no se pega a una direccion ajena.**
+        // Cuando el emisor viene del sistema de origen, la direccion ya
+        // trae la altura adentro: agregarle el numero configurado daba
+        // «Avda. Gral. Aquino 1250 N° 123», o sea dos alturas distintas
+        // en la misma linea. El XML sigue usando dNumCas, que es donde la
+        // DNIT lo pide por separado.
+        $dir = (string) $em['direccion'];
+        if (trim((string) ($em['sucursal_nombre'] ?? '')) === '' && trim((string) $em['numero_casa']) !== '') {
+            $dir .= ' N° ' . $em['numero_casa'];
+        }
+        $text('Dirección: ' . $dir, $exl, $ey - 13, 8);
+        $ciudad = trim((string) ($em['sucursal_ciudad'] ?? '')) ?: $em['descripcion_ciudad'];
+        $text('Ciudad: ' . $ciudad, $exl, $ey - 23, 8);
         $text('Tel: ' . $em['telefono'], $exl, $ey - 33, 8);
         $text('Correo: ' . $em['email'], $exl, $ey - 43, 8);
+        // Con varias sucursales, de cual salio el papel no se deduce del
+        // numero para quien lo recibe: el establecimiento son tres
+        // digitos. Se nombra, y solo cuando el sistema de origen lo manda.
+        $sucursal = trim((string) ($em['sucursal_nombre'] ?? ''));
+        if ($sucursal !== '') {
+            $text('Sucursal: ' . mb_strimwidth($sucursal, 0, 45, '...'), $exl, $ey - 63, 8);
+        }
+
         $text('Actividad: ' . mb_strimwidth($em['descripcion_actividad_economica'], 0, 55, '...'), $exl, $ey - 53, 8);
 
         // Línea vertical separadora
@@ -263,16 +336,18 @@ final class KudeService
 
         // ---- TÍTULO KUDE ----
         $kyTop = $H - $mg - 83;
-        $rect($mg, $kyTop - 14, $W - 2 * $mg, 14, true, '0.2 0.2 0.4');
-        // texto blanco
-        $stream .= sprintf("BT /F2 10 Tf 1 1 1 rg %.2f %.2f Td (KuDE de FACTURA ELECTR%sNICA) Tj 0 0 0 rg ET\n",
-            $mg + 6, $kyTop - 10, "\xD3"
+        $rect($mg, $kyTop - 14, $W - 2 * $mg, 14, true, self::ACENTO);
+        // Texto BLANCO sobre el verde: 6,3:1, que es la combinacion que el
+        // sistema usa en sus botones principales. Con el oro de antes iba
+        // negro, porque el oro era claro y el blanco encima daba 2,1:1.
+        $stream .= sprintf("BT /F2 10 Tf %s rg %.2f %.2f Td (KuDE de FACTURA ELECTR%sNICA) Tj 0 0 0 rg ET\n",
+            self::BLANCO, $mg + 6, $kyTop - 10, "\xD3"
         );
 
         // Número de página relativo al total (obligatorio si hay varias páginas — manual 13.3, ej. "2/5")
         if ($totalPages > 1) {
-            $stream .= sprintf("BT /F2 8 Tf 1 1 1 rg %.2f %.2f Td (%s) Tj 0 0 0 rg ET\n",
-                $W - $mg - 70, $kyTop - 10, $esc(sprintf('Página: %d/%d', $pageNo, $totalPages))
+            $stream .= sprintf("BT /F2 8 Tf %s rg %.2f %.2f Td (%s) Tj 0 0 0 rg ET\n",
+                self::BLANCO, $W - $mg - 70, $kyTop - 10, $esc(sprintf('Página: %d/%d', $pageNo, $totalPages))
             );
         }
 
@@ -288,9 +363,13 @@ final class KudeService
         $text('Cond. de venta: ' . $doc['descripcion_condicion_operacion'], $col2, $rl, 8);
         $rl -= 11;
 
-        $docId = ($cli['ruc'] !== '') ? ($cli['ruc'] . '-' . $cli['dv']) : ($cli['numero_documento'] ?? 'S/D');
-        $text('RUC / Documento: ' . $docId, $col1, $rl, 8);
-        $text('Moneda: PYG', $col2, $rl, 8);
+        $tieneRuc = $cli['ruc'] !== '';
+        $docId = $tieneRuc ? ($cli['ruc'] . '-' . $cli['dv']) : ($cli['numero_documento'] ?? 'S/D');
+        $rotulo = $tieneRuc
+            ? 'RUC: '
+            : (trim((string) ($cli['descripcion_tipo_documento'] ?? '')) ?: 'Documento') . ': ';
+        $text($rotulo . $docId, $col1, $rl, 8);
+        $text('Moneda: ' . ($doc['moneda'] ?? 'PYG'), $col2, $rl, 8);
         $rl -= 11;
 
         $text('Nombre o Razón Social: ' . mb_strimwidth($cli['nombre'], 0, 50, '...'), $col1, $rl, 8);
@@ -307,7 +386,11 @@ final class KudeService
         // ---- TABLA DE ÍTEMS ----
         $tTop = $ry - 55;
         $tW = $W - 2 * $mg;
-        $colW = [48, 206, 35, 70, 60, 60]; // REF,DESC,%DESC,PRECIO,EXENTA,5%
+        // **El orden lo pidió el usuario**: precio, DESCUENTO en monto —no en
+        // porcentaje—, y recién después lo que va a cada tasa, ya descontado.
+        // Con un servicio de 100.000 al 20 %: PRECIO UNITARIO 100.000,
+        // DESCUENTO 20.000, 10% 80.000. Las tres columnas se explican entre sí.
+        $colW = [48, 190, 70, 60, 55, 55]; // REF,DESC,PRECIO,DESCUENTO,EXENTA,5%
         $colW[] = $tW - array_sum($colW); // 10%
         $colX = [$mg];
         foreach ($colW as $i => $w) {
@@ -317,13 +400,24 @@ final class KudeService
         }
 
         // Cabecera tabla
-        $rect($mg, $tTop - 24, $tW, 24, true, '0.2 0.2 0.4');
-        $headers = ['REF', 'DESCRIPCIÓN', '%DESC', 'PRECIO\nUNITARIO', 'EXENTA', '5%', '10%'];
+        $rect($mg, $tTop - 24, $tW, 24, true, self::FONDO);
+        // Una regla del acento de 1 pt debajo: separa sin gritar, que es lo
+        // que una banda maciza hace de mas en una tabla larga.
+        $stream .= sprintf("q %s RG 1 w %.2f %.2f m %.2f %.2f l S Q\n",
+            self::ACENTO, $mg, $tTop - 24, $mg + $tW, $tTop - 24);
+        $headers = ['REF', 'DESCRIPCIÓN', 'PRECIO\nUNITARIO', 'DESCUENTO', 'EXENTA', '5%', '10%'];
+        // Las dos últimas —5% y 10%— van centradas, cabecera y valores.
+        $centradas = [5, 6];
         foreach ($headers as $hi => $hdr) {
             $cx = $colX[$hi] + 2;
             $hLines = explode('\n', $hdr);
             foreach ($hLines as $k => $hl) {
-                $stream .= sprintf("BT /F2 7 Tf 1 1 1 rg %.2f %.2f Td (%s) Tj 0 0 0 rg ET\n",
+                if (in_array($hi, $centradas, true)) {
+                    $centerCell($hl, $colX[$hi], $tTop - 10 - ($k * 9), $colW[$hi], 7, true);
+                    continue;
+                }
+                $stream .= sprintf("BT /F2 7 Tf %s rg %.2f %.2f Td (%s) Tj 0 0 0 rg ET\n",
+                    self::NEGRO,
                     $cx, $tTop - 10 - ($k * 9), $this->pdfStr($hl)
                 );
             }
@@ -351,14 +445,24 @@ final class KudeService
             $v5     = ($item['tasa_iva'] == 5 && $item['afectacion_iva'] != 3) ? (float) $item['ea008'] : 0;
             $v10    = ($item['tasa_iva'] == 10 && $item['afectacion_iva'] != 3) ? (float) $item['ea008'] : 0;
 
+            // **El descuento va en su columna, en MONTO.** Es lo mismo que el
+            // XML declara: PRECIO UNITARIO es E721 (el de lista), DESCUENTO es
+            // EA002 × cantidad —lo que se descontó en el renglón— y el importe
+            // bajo cada tasa es EA008, el neto. Antes iba como porcentaje
+            // («%DESC»), que obligaba a la clienta a hacer la cuenta; y antes de
+            // eso ni se mostraba, con los precios unitarios corridos —75.000
+            // impreso como 74.648— y un «DESCUENTO: 0 %» al pie.
+            $precio = (float) $item['precio_unitario'];
+            $desc   = (float) ($item['descuento_item'] ?? 0) * (float) $item['cantidad'];
+
             $iy = $itemY - 11;
             $text((string) $item['codigo'],                  $colX[0] + 2, $iy, 7.5);
-            $text(mb_strimwidth((string) $item['descripcion'], 0, 38, '...'), $colX[1] + 2, $iy, 7.5);
-            $numberCell('0',                                  $colX[2], $iy, $colW[2], 7.5);
-            $numberCell($fmt((float) $item['precio_unitario']), $colX[3], $iy, $colW[3], 7.5);
+            $text(mb_strimwidth((string) $item['descripcion'], 0, 35, '...'), $colX[1] + 2, $iy, 7.5);
+            $numberCell($fmt($precio),                        $colX[2], $iy, $colW[2], 7.5);
+            $numberCell($desc > 0 ? $fmt($desc) : '0',        $colX[3], $iy, $colW[3], 7.5);
             $numberCell($exenta > 0 ? $fmt($exenta) : '',      $colX[4], $iy, $colW[4], 7.5);
-            $numberCell($v5 > 0 ? $fmt($v5) : '',              $colX[5], $iy, $colW[5], 7.5);
-            $numberCell($v10 > 0 ? $fmt($v10) : '',            $colX[6], $iy, $colW[6], 7.5);
+            $centerCell($v5 > 0 ? $fmt($v5) : '',              $colX[5], $iy, $colW[5], 7.5);
+            $centerCell($v10 > 0 ? $fmt($v10) : '',            $colX[6], $iy, $colW[6], 7.5);
 
             $itemY -= $rowH;
         }
@@ -373,23 +477,24 @@ final class KudeService
             $rect($mg, $stY - 18, $tW, 18, false);
             $text('SUBTOTAL', $colX[0] + 2, $stY - 11, 8, true);
             $numberCell($fmt((float) $tot['subtotal_exenta']), $colX[4], $stY - 11, $colW[4], 8, true);
-            $numberCell($fmt((float) $tot['subtotal_5']),      $colX[5], $stY - 11, $colW[5], 8, true);
-            $numberCell($fmt((float) $tot['subtotal_10']),     $colX[6], $stY - 11, $colW[6], 8, true);
+            $centerCell($fmt((float) $tot['subtotal_5']),      $colX[5], $stY - 11, $colW[5], 8, true);
+            $centerCell($fmt((float) $tot['subtotal_10']),     $colX[6], $stY - 11, $colW[6], 8, true);
             $stY -= 18;
 
-            $rect($mg, $stY - 18, $tW, 18, false);
-            $text('DESCUENTO: 0 %', $colX[0] + 2, $stY - 11, 8);
-            $numberCell('0', $colX[6], $stY - 11, $colW[6], 8);
-            $stY -= 18;
+            // **No hay fila DESCUENTO al pie**, por pedido del usuario: el
+            // descuento es uno solo y va desglosado por renglón, en su columna.
+            // Repetirlo acá era contarlo dos veces —y en cero, como estaba, se
+            // leía como que no hubo ninguno—. Los importes de la derecha ya son
+            // netos, así que SUBTOTAL y TOTAL cierran solos.
 
             // Total operación
             $rect($mg, $stY - 18, $tW, 18, false);
             $text('TOTAL DE LA OPERACION:', $colX[0] + 2, $stY - 11, 8, true);
-            $numberCell($fmt((float) $tot['total_neto']), $colX[6], $stY - 11, $colW[6], 9, true);
+            $centerCell($fmt((float) $tot['total_neto']), $colX[6], $stY - 11, $colW[6], 9, true);
             $stY -= 18;
 
             // Total en letras
-            $rect($mg, $stY - 18, $tW, 18, true, '0.95 0.95 0.95');
+            $rect($mg, $stY - 18, $tW, 18, true, self::FONDO);
             $letras = 'TOTAL A PAGAR EN LETRAS: ' . $this->numberToWords((int) $tot['total_neto']) . ' GUARANÍES';
             $text(mb_strimwidth($letras, 0, 95, '...'), $colX[0] + 2, $stY - 11, 7.5, true);
             $stY -= 18;
@@ -422,7 +527,7 @@ final class KudeService
 
         // CDC formateado en grupos de 4
         $cdcGrouped = implode(' ', str_split($cdc, 4));
-        $rect($qrX, $qrTop - 68, $W - $mg - $qrX - 4, 26, true, '0.85 0.95 0.85');
+        $rect($qrX, $qrTop - 68, $W - $mg - $qrX - 4, 26, true, self::FONDO);
         $stream .= sprintf("BT /F2 9 Tf %.2f %.2f Td (%s) Tj ET\n",
             $qrX + 4, $qrTop - 58, $this->pdfStr($cdcGrouped)
         );
@@ -461,7 +566,6 @@ final class KudeService
 
         // ---- FOOTER ----
         $fyY = $cdcY - 12;
-        $text('Servicio provisto por PG and RJ', $W - $mg - 150, $fyY, 7);
 
         // (Marca de agua "PRUEBA" removida a pedido — el KuDE sale limpio.)
 

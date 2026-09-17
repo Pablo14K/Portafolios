@@ -27,6 +27,22 @@ final class InvoiceFactory
         10 => 'Retención',
     ];
 
+    /** Tipos de transaccion SIFEN (Manual v150, campo D011 iTipTra). */
+    private const TRANSACCIONES = [
+        1  => 'Venta de mercaderia',
+        2  => 'Prestacion de servicios',
+        3  => 'Mixto (venta de mercaderia y servicios)',
+        4  => 'Venta de activo fijo',
+        5  => 'Venta de divisas',
+        6  => 'Compra de divisas',
+        7  => 'Promocion o entrega de muestras',
+        8  => 'Donacion',
+        9  => 'Anticipo',
+        10 => 'Compra de productos',
+        11 => 'Compra de servicios',
+        12 => 'Venta de credito fiscal',
+    ];
+
     private const MONEDAS = [
         'PYG' => 'Guarani',
         'USD' => 'Dolar Americano',
@@ -46,6 +62,13 @@ final class InvoiceFactory
         $cli = $cruda['cli'];
 
         $moneda = strtoupper((string)($fac['moneda'] ?: 'PYG'));
+
+        // Sin valor en el .txt vale 1, que es como se comportaba antes: un
+        // archivo viejo no cambia de significado al actualizar.
+        $tipoTra = (int)($fac['tipo_transaccion'] ?? 0);
+        if (!isset(self::TRANSACCIONES[$tipoTra])) {
+            $tipoTra = 1;
+        }
         $descMoneda = self::MONEDAS[$moneda] ?? $moneda;
         $condicion = (int)($fac['condicion'] ?: 1); // 1=contado, 2=crédito
 
@@ -76,13 +99,33 @@ final class InvoiceFactory
                 throw new RuntimeException("IVA inválido '{$it['iva']}' en ítem '{$it['codigo']}' (use 10, 5 o 0).");
             }
             $afectacion = $iva === 0 ? 3 : 1; // 1=gravado, 3=exento
+
+            // **El precio unitario es el de LISTA y el descuento va aparte**, que
+            // es como lo modela el SIFEN: E721 dPUniProSer es el precio «incluidos
+            // impuestos» y EA002 dDescItem el descuento particular sobre ese
+            // precio unitario; EA008 dTotOpeItem = (E721 − EA002) × cantidad.
+            //
+            // El campo 5 del ITM trae el NETO —el emisor reparte su descuento
+            // entre los renglones antes de mandar— y el campo 7, opcional, el
+            // precio de lista: la diferencia es el descuento del renglón. Sin
+            // campo 7 (un emisor viejo) lista = neto y el descuento es 0, o sea
+            // exactamente lo de antes. **El total del documento no cambia**: se
+            // sigue armando con el neto (precio − descuento).
+            //
+            // Hasta acá el precio de lista era «sólo para el KuDE» y el XML
+            // declaraba el neto como precio unitario, sin descuento: válido, pero
+            // el KuDE es la representación gráfica del XML y decían cosas
+            // distintas. Ahora los dos dicen precio, descuento y total.
+            $neto  = (float)$it['precio_unitario'];
+            $lista = max($neto, (float)($it['precio_lista'] ?? $neto));
             $items[] = [
                 'codigo'                    => (string)($it['codigo'] !== '' ? $it['codigo'] : '001'),
                 'descripcion'               => (string)$it['descripcion'],
                 'unidad_codigo'             => '77',   // 77 = UNI (unidad)
                 'unidad_descripcion'        => 'UNI',
                 'cantidad'                  => (float)$it['cantidad'],
-                'precio_unitario'           => (float)$it['precio_unitario'],
+                'precio_unitario'           => $lista,
+                'descuento_item'            => $lista - $neto,
                 'afectacion_iva'            => $afectacion,
                 'descripcion_afectacion_iva'=> $afectacion === 3 ? 'Exento' : 'Gravado IVA',
                 'proporcion_iva'            => 100,
@@ -97,7 +140,7 @@ final class InvoiceFactory
         $decimales = ($moneda === 'PYG') ? 0 : 2;
         $totalDoc  = 0.0;
         foreach ($items as $it) {
-            $totalDoc += round($it['cantidad'] * $it['precio_unitario'], $decimales);
+            $totalDoc += round($it['cantidad'] * ($it['precio_unitario'] - $it['descuento_item']), $decimales);
         }
         $totalDoc = round($totalDoc, $decimales);
 
@@ -132,7 +175,7 @@ final class InvoiceFactory
             }
         }
 
-        $emitter = $this->buildEmitter();
+        $emitter = $this->buildEmitter($cruda['emi'] ?? []);
 
         $invoice = [
             // documento
@@ -146,8 +189,8 @@ final class InvoiceFactory
             'fecha_firma'                    => $this->fechaHora((string)$fac['fecha']),
             'tipo_emision'                   => 1,
             'descripcion_tipo_emision'       => 'Normal',
-            'tipo_transaccion'               => 1,
-            'descripcion_tipo_transaccion'   => 'Venta de mercaderia',
+            'tipo_transaccion'               => $tipoTra,
+            'descripcion_tipo_transaccion'   => self::TRANSACCIONES[$tipoTra] ?? 'Venta de mercaderia',
             'tipo_impuesto'                  => 1,
             'descripcion_tipo_impuesto'      => 'IVA',
             'moneda'                         => $moneda,
@@ -180,9 +223,52 @@ final class InvoiceFactory
         return ['emitter' => $emitter, 'invoice' => $invoice];
     }
 
-    private function buildEmitter(): array
+    /**
+     * Los datos de quien emite.
+     *
+     * Salen de config/.env, y **el registro EMI del .txt les gana**. Sin esa
+     * linea el KuDE imprimia lo que hubiera en el archivo de ejemplo —"MI
+     * EMPRESA S.A.", RUC 80012345-6 con el digito verificador mal, actividad
+     * "VENTA AL POR MENOR"— porque el emisor nunca viajaba con la factura.
+     *
+     * Y no alcanza con cargar el .env una vez: **el emisor cambia con la
+     * sucursal**. La direccion y el timbrado son los del local que atendio,
+     * igual que el establecimiento del numero impreso.
+     *
+     * Lo que NO se pisa son los codigos geograficos de SIFEN
+     * (departamento/distrito/ciudad): son de una tabla oficial y el sistema
+     * de origen manda la ciudad como texto, no su codigo. Pisar la
+     * descripcion dejando el codigo viejo haria que el XML se contradiga
+     * solo, asi que se cargan una vez en el .env y mandan los dos.
+     */
+    private function buildEmitter(array $emi = []): array
     {
         $c = $this->emisorConfig;
+
+        $dato = static fn (string $k): string => trim((string)($emi[$k] ?? ''));
+        foreach ([
+            'razon_social'                    => 'razon_social',
+            'ruc'                             => 'ruc',
+            'dv'                              => 'dv',
+            'direccion'                       => 'direccion',
+            'telefono'                        => 'telefono',
+            'email'                           => 'email',
+            'codigo_actividad_economica'      => 'actividad_cod',
+            'descripcion_actividad_economica' => 'actividad_desc',
+            'timbrado_numero'                 => 'timbrado',
+            'timbrado_inicio'                 => 'timbrado_ini',
+            'timbrado_fin'                    => 'timbrado_fin',
+        ] as $destino => $origen) {
+            if ($dato($origen) !== '') {
+                $c[$destino] = $dato($origen);
+            }
+        }
+
+        // El nombre del local y su ciudad son para el KuDE, no para el XML:
+        // con varias sedes, de cual salio el papel no se deduce del numero
+        // para quien lo recibe.
+        $c['sucursal_nombre'] = $dato('sucursal');
+        $c['sucursal_ciudad'] = $dato('ciudad');
         $req = ['ruc', 'dv', 'razon_social', 'timbrado_numero'];
         foreach ($req as $k) {
             if (trim((string)($c[$k] ?? '')) === '') {
@@ -215,6 +301,8 @@ final class InvoiceFactory
             'id_csc'                          => (string)($c['id_csc'] ?? '0001'),
             'csc'                             => (string)($c['csc'] ?? ''),
             'info_adicional_kude'             => (string)($c['info_adicional_kude'] ?? ''),
+            'sucursal_nombre'                 => (string)($c['sucursal_nombre'] ?? ''),
+            'sucursal_ciudad'                 => (string)($c['sucursal_ciudad'] ?? ''),
         ];
     }
 

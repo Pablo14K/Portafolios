@@ -12,7 +12,7 @@ San Lorenzo, Paraguay · [GitHub](https://github.com/Pablo14K)
 ## Professional Summary
 
 Final-year Computer Engineering student, six months from graduating. I build
-electronic invoicing and management systems in PHP and MySQL, and Android
+electronic invoicing and management systems in PHP, Laravel and MySQL, and Android
 applications in Kotlin.
 
 I work well where requirements are strict and verifiable: I implemented Paraguay's
@@ -21,24 +21,42 @@ signing and KuDE— on plain PHP with no external dependencies, so it could be
 deployed on shared hosting. Where no library was available, I wrote what was
 missing: an ISO/IEC 18004 QR encoder, a PDF generator and an SMTP client.
 
+I apply the same standard to management software: my largest project is a
+multi-branch Laravel application running in production on Docker, with business logic
+in the database, pessimistic locking for concurrency control, and 240 automated tests
+that run against a real database.
+
 I am looking for a web or mobile development role where I can work across the whole
 stack —database, server logic and interface— and keep growing as a developer.
 
 ## Technical Skills
 
-- **Languages:** PHP 8, Kotlin, Java, SQL, JavaScript, HTML5, CSS
+- **Languages:** PHP 8.3, Kotlin, Java, SQL, JavaScript, HTML5, CSS
+- **Backend frameworks:** Laravel 13 — service-layer architecture, authorisation
+  middleware, Blade, task scheduler, PHPUnit
 - **Databases:** MySQL / MariaDB — normalised modelling (3NF), stored procedures,
-  functions, triggers and views; business logic in the engine. Room on Android
+  functions, triggers, views and CHECK constraints; business logic in the engine.
+  Transactions and pessimistic locking (SELECT FOR UPDATE) for concurrency control.
+  Room on Android
+- **Testing:** PHPUnit against a real database, concurrency tests with parallel
+  processes, structural integrity tests
 - **Android:** Jetpack Compose, Material 3, Media3/ExoPlayer, Navigation, DataStore,
   WorkManager, Coroutines and Flow, androidx.tv for Android TV
 - **Integrations and protocols:** SOAP, XML/XSD, REST, socket-level SMTP, MIME,
   scraping with Jsoup, DNS-over-HTTPS
 - **Applied cryptography:** XMLDSig, RSA-SHA256, X.509 and P12/PEM certificates,
   OpenSSL, WebAuthn/FIDO2 (CBOR, COSE, ASN.1/DER)
-- **Frontend:** Bootstrap 5, vanilla JavaScript
-- **Infrastructure:** Apache, cPanel, cron, Gradle, shared hosting deployment
+- **Frontend:** Bootstrap 5, vanilla JavaScript, WCAG accessibility (contrast,
+  no-JavaScript fallbacks, responsive design)
+- **Infrastructure:** Docker and Docker Compose, Caddy, Traefik, Apache, php-fpm,
+  OPcache, cPanel, cron, Gradle, VPS and shared hosting deployment
 - **Domain:** SIFEN v150 electronic invoicing (Paraguayan tax authority)
-- **Tools:** Git, Android Studio, Claude Code, Codex
+- **Tools:** Git, Android Studio, Claude Code, Codex, Antigravity
+
+**AI-assisted development.** I use Claude Code, Codex and Antigravity as a regular
+part of my workflow: to speed up implementation, review code and write documentation.
+Architecture decisions, the data model and verification are mine, and anything
+generated goes through the test suite before it lands.
 
 ## Projects
 
@@ -51,13 +69,22 @@ of the v150 Technical Manual, XMLDSig signing with RSA-SHA256 and X.509, and a q
 system that resumes interrupted deliveries without duplicating documents.
 ~6,500 lines of PHP.
 
-### Hair Salon Management System (2026, in development)
-Full management web application —scheduling, clients, inventory, cash register and a
-customer self-service portal— with MVC implemented by hand on plain PHP, no
-frameworks. Business logic lives in the database: 55 tables in 3NF, 27 functions, 20
-stored procedures and 17 triggers. Includes biometric WebAuthn login written from
-scratch (CBOR decoder, COSE keys and ASN.1/DER in PHP). Final-year thesis project,
-in a pair.
+### Hair Salon Management System (2026, in production)
+Multi-branch Laravel 13 management web application —scheduling, clients, inventory,
+cash register, electronic invoicing and a customer self-service portal— deployed in
+production on Docker on a VPS with php-fpm, Caddy and HTTPS. Business logic lives in
+the database: 85 tables in 3NF, 51 functions, 22 stored procedures, 17 triggers, 18
+views and 93 CHECK constraints, consumed through a dedicated service layer rather than
+reimplemented in the ORM. It handles splitting one appointment across several
+professionals and several people, with pessimistic locking so two simultaneous
+bookings on the same slot leave exactly one appointment. It issues electronic invoices
+and credit notes to the Paraguayan tax authority. Includes biometric WebAuthn login
+written from scratch (CBOR decoder, COSE keys and ASN.1/DER in PHP) and a theming
+engine that derives 42 colour tokens from a single chosen colour, verifying WCAG
+contrast. 240 automated tests, including concurrency tests with parallel processes.
+I migrated the system from framework-less PHP to Laravel 13 while preserving the data
+model. Final-year thesis project, in a pair.
+→ [Repository](https://github.com/Pablo14K/SPG)
 
 ### Nexus — Android App (2026, in development)
 Android application in Kotlin and Jetpack Compose, sharing one codebase across phone
@@ -71,7 +98,9 @@ render— by falling back to libVLC. ~10,700 lines of Kotlin.
 A stripped-down version of the system above: the same tax engine with no interface
 and no database, so a business can issue electronic invoices without changing the
 software it already runs. Integration is a folder where it drops text files. Runs as
-a cron job or as a watcher process.
+a cron job, a watcher process or a Docker container, and is integrated in production
+with the Hair Salon Management System, for which the input format was extended while
+keeping backward compatibility with earlier integrators.
 
 ## Work Experience
 
@@ -90,7 +119,7 @@ April 2026 – May 2026 | Paraguay
 Fifth year, in progress | Expected graduation early 2027
 
 Final-year thesis in development: "Web management system for a hair salon in Luque"
-— Research line: Computer Systems.
+— Research line: Computer Systems. The system is deployed and running in production.
 
 ## Languages
 
