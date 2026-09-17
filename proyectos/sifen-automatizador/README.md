@@ -1,8 +1,9 @@
 # SIFEN Automatizador
 
-> **Versión simplificada** de [SIFEN — Sistema de Facturación Electrónica](../sifen-facturacion-electronica):
-> el mismo motor fiscal reducido a lo mínimo, sin interfaz ni base de datos. Un
-> sistema externo deja un `.txt` en una carpeta y recoge el XML firmado y el PDF en otra.
+> **Versión reducida** de [SIFEN — Integración con la API del Estado](../sifen-integracion):
+> el mismo motor de integración despojado a lo mínimo, sin interfaz ni base de datos.
+> Un sistema externo deja un `.txt` en una carpeta y recoge el XML firmado y el PDF en
+> otra.
 
 | | |
 | --- | --- |
@@ -10,21 +11,24 @@
 | **Periodo** | 2026 |
 | **Stack** | PHP 8.1 · cron / watcher · Apache · cPanel · Docker |
 | **Volumen** | ~4.300 líneas de PHP |
-| **Origen** | Derivado del [sistema principal](../sifen-facturacion-electronica), encargado en una pasantía en Vieloy Sistemas y conservado con autorización de la empresa |
-| **Relación** | Versión simplificada del [sistema de facturación completo](../sifen-facturacion-electronica), del que reutiliza el motor fiscal |
-| **Integrado en** | [Sistema de Gestión para Peluquería](../sistema-gestion-peluqueria), que lo usa en producción como servicio de facturación electrónica |
+| **Origen** | Derivado del [sistema principal](../sifen-integracion), encargado en una pasantía en Vieloy Sistemas y conservado con autorización de la empresa |
+| **Relación** | Versión reducida del [sistema completo](../sifen-integracion), del que reutiliza el motor de integración |
+| **Integrado en** | [Sistema de Gestión para Peluquería](../sistema-gestion-peluqueria), que lo usa en producción para declarar sus comprobantes |
 
 ## Contexto
 
-El sistema de facturación completo resuelve el problema para quien puede adoptarlo
-entero: su base de datos, su interfaz, su flujo. Pero un comercio que ya tiene su
-propio software de ventas no quiere cambiarlo — quiere que **eso que ya usa** emita
-facturas electrónicas válidas.
+El sistema completo resuelve el problema para quien puede adoptarlo entero: su base
+de datos, su interfaz, su flujo. Pero un negocio que ya tiene su propio software no
+quiere cambiarlo — quiere que **eso que ya usa** pueda declarar sus documentos ante
+SIFEN.
 
-De ahí sale esta versión reducida: **el mismo motor fiscal, despojado de todo lo
-demás**. Sin interfaz web, sin base de datos, sin gestión de clientes ni de colas.
-Solo la parte que convierte datos de una factura en un documento electrónico
-firmado y aprobado.
+De ahí sale esta versión reducida: **el mismo motor de integración, despojado de todo
+lo demás**. Sin interfaz web, sin base de datos, sin gestión de clientes ni de colas.
+Solo la parte que convierte unos datos de entrada en un documento electrónico firmado
+y aprobado.
+
+Es un ejercicio de **diseño de integración**: cuánto se le puede exigir a quien
+integra, y cuánto conviene absorber de este lado.
 
 La integración es deliberadamente pobre en supuestos: el sistema externo solo tiene
 que saber escribir un archivo de texto en una carpeta. No necesita hablar SOAP, ni
@@ -49,16 +53,16 @@ llamada HTTP si no quiere.
 3. Si se aprueba, deja el XML y el KuDE en PDF en `salida/`. Si falla, escribe el
    motivo en `errores/` y mueve el original a `procesados/`.
 
-Deliberadamente **no reimplementa la lógica fiscal**: reutiliza el motor del sistema
-principal (CDC, XML v150, firma XMLDSig, QR y KuDE) montándolo como dependencia de
-solo lectura. Así una corrección en las reglas de la DNIT se aplica en un único
+Deliberadamente **no reimplementa nada de la especificación**: reutiliza el motor del
+sistema principal (CDC, XML v150, firma XMLDSig, QR y KuDE) montándolo como
+dependencia de solo lectura. Así una corrección en las reglas de la DNIT se aplica en un único
 sitio y ambos productos la heredan.
 
 ## Decisiones técnicas
 
 ### Un formato de entrada que cualquiera puede generar
 
-El `.txt` usa registros por línea separados por `|`, agrupando una factura por
+El `.txt` usa registros por línea separados por `|`, agrupando un documento por
 bloque. Es un formato que se escribe con un `printf` desde cualquier lenguaje, sin
 librerías:
 
@@ -126,7 +130,7 @@ y otro.
 
 ### Endpoint HTTP opcional, protegido por token
 
-Para los sistemas que prefieren empujar la factura en lugar de escribir en disco,
+Para los sistemas que prefieren empujar el documento en lugar de escribir en disco,
 `public/index.php` expone un endpoint que acepta el mismo formato `.txt` por HTTP,
 autenticado con un token compartido. `public/descargar.php` permite recuperar
 después el XML y el PDF resultantes.
@@ -158,10 +162,10 @@ bin/
   detener.sh
 src/
   TxtParser.php     Parseo y validación del formato de entrada
-  InvoiceFactory.php  Construcción del payload de factura
+  InvoiceFactory.php  Construcción del payload del documento
   Procesador.php    Orquestación del ciclo completo
   Logger.php        Registro de la actividad
-motor/              Motor fiscal reutilizado del sistema principal
+motor/              Motor de integración reutilizado del sistema principal
 public/
   index.php         Endpoint HTTP con token
   descargar.php     Descarga de XML y KuDE
@@ -202,7 +206,7 @@ constantes en `KudeService` y no dependen de ninguna hoja de estilos.
 | Herramienta | Para qué |
 | --- | --- |
 | **PHP 8.1** (`openssl`, `dom`, `mbstring`) | Lenguaje y criptografía |
-| **Motor fiscal propio** (`motor/`) | CDC, XML v150, XMLDSig, QR y KuDE, heredados del sistema principal |
+| **Motor propio** (`motor/`) | CDC, XML v150, XMLDSig, QR y KuDE, heredados del sistema principal |
 | **cron** | Ejecución periódica en hosting compartido |
 | **Apache / cPanel** | Despliegue y endpoint HTTP |
 | **Docker** | Despliegue como servicio junto al sistema que lo integra |
@@ -221,5 +225,5 @@ para poder desplegarlo en un cPanel sin acceso a consola.
 
 - [x] Confirmar si se integró con un sistema de terceros en producción y cuál —
       el [SGP](../sistema-gestion-peluqueria), desde agosto de 2026
-- [ ] Resultado medible: facturas procesadas por día, tiempo medio por documento
+- [ ] Resultado medible: documentos procesados por día, tiempo medio por documento
 - [ ] Captura del ciclo completo: `.txt` de entrada y KuDE resultante

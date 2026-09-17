@@ -9,7 +9,7 @@ heterogéneas.
 
 | Proyecto | Descripción | Stack | Estado |
 | --- | --- | --- | --- |
-| [SIFEN — Integración con API del Estado](proyectos/sifen-facturacion-electronica) | Integración completa contra SIFEN, la API SOAP de la DNIT paraguaya, ajustada al Manual Técnico oficial v150: XML validado contra XSD, firma XMLDSig, PDF y QR, todo en PHP nativo sin dependencias. | PHP · MySQL · SOAP · XMLDSig | Funcional |
+| [SIFEN — Integración con API del Estado](proyectos/sifen-integracion) | Integración completa contra SIFEN, la API SOAP de la DNIT paraguaya, ajustada al Manual Técnico oficial v150: XML validado contra XSD, firma XMLDSig, PDF y QR, todo en PHP nativo sin dependencias. | PHP · MySQL · SOAP · XMLDSig | Funcional |
 | [Automatizador SIFEN](proyectos/sifen-automatizador) | Versión reducida del anterior: el mismo motor SIFEN sin interfaz ni base de datos, para integrar sistemas de terceros por archivos de texto. Integrado en producción con el SGP. | PHP · cron · cPanel · Docker | Funcional |
 | [Nexus](proyectos/nexus) | App Android de películas, series y anime. Agrega varios catálogos, resuelve fuentes en paralelo y reproduce con recuperación automática ante fallos. Móvil y TV. | Kotlin · Compose · Media3 · Room | En desarrollo |
 | [JahechaCine](proyectos/jahechacine) | Primera versión de la anterior. Catálogo de películas con TMDB en Java y vistas clásicas. | Java · Retrofit · Glide | Discontinuado |

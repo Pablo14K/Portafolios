@@ -1,9 +1,13 @@
-# SIFEN — Sistema de Facturación Electrónica (Paraguay)
+# SIFEN — Integración con la API del Estado paraguayo
 
-> Sistema completo de facturación electrónica contra SIFEN, el régimen de la DNIT
+> Integración completa contra SIFEN, el régimen de documentos electrónicos de la DNIT
 > paraguaya: genera el XML del documento, lo firma digitalmente, produce el KuDE en
-> PDF con QR y lo envía al cliente por correo. Íntegramente en PHP, sin dependencias
-> externas.
+> PDF con QR y lo envía al destinatario por correo. Íntegramente en PHP, sin
+> dependencias externas.
+>
+> Lo interesante del proyecto no es el dominio sino el requisito: una especificación
+> oficial de cientos de páginas que hay que cumplir al byte, sin poder usar ninguna
+> librería.
 
 | | |
 | --- | --- |
@@ -16,12 +20,12 @@
 
 ## Contexto
 
-Emitir facturas electrónicas en Paraguay obliga a cumplir la especificación SIFEN
-al detalle: un identificador CDC de 44 dígitos con dígito verificador módulo 11, un
-XML cuya estructura y orden de grupos debe coincidir exactamente con el XSD oficial,
-firma XMLDSig con certificado emitido por un prestador habilitado, un código QR con
-la estructura `dCarQR` y una representación gráfica impresa (el KuDE) con un formato
-reglado.
+Integrarse con SIFEN obliga a cumplir su especificación al detalle, y no admite
+aproximaciones: un identificador CDC de 44 dígitos con dígito verificador módulo 11,
+un XML cuya estructura y orden de grupos debe coincidir exactamente con el XSD
+oficial, firma XMLDSig con certificado emitido por un prestador habilitado, un código
+QR con la estructura `dCarQR` y una representación gráfica impresa (el KuDE) con un
+formato reglado. Un campo fuera de orden y el servicio rechaza el documento entero.
 
 Las librerías del ecosistema para esto son escasas y suelen asumir Node.js o
 Composer. El objetivo era un sistema desplegable en un hosting compartido con cPanel
@@ -31,13 +35,14 @@ dependencias**.
 ## Qué construí
 
 La versión inicial delegaba la generación y firma en un microservicio Node.js. Lo
-reescribí por completo para eliminar esa dependencia: hoy todo el flujo fiscal corre
-en PHP nativo sobre las extensiones estándar (`openssl`, `dom`, `curl`, `pdo_mysql`).
+reescribí por completo para eliminar esa dependencia: hoy todo el flujo de emisión
+corre en PHP nativo sobre las extensiones estándar (`openssl`, `dom`, `curl`,
+`pdo_mysql`).
 
 El pipeline de emisión, en orden:
 
 ```
-Factura (BD)
+Documento (BD)
   └→ CdcGenerator      CDC de 44 dígitos + DV módulo 11
   └→ SifenXmlBuilder   XML rDE/DE según el XSD oficial
   └→ XmlSigner         firma XMLDSig: digest SHA-256, RSA-SHA256, certificado X509
@@ -47,7 +52,8 @@ Factura (BD)
   └→ MailService       correo al cliente con el PDF y el XML adjuntos
 ```
 
-Sobre esto, una interfaz web para cargar facturas, revisarlas y disparar el envío.
+Sobre esto, una interfaz web para cargar los documentos, revisarlos y disparar el
+envío.
 
 ## Retos técnicos
 
@@ -86,7 +92,7 @@ etiquetas ni prefijos de namespace, y omitiendo los campos opcionales con valor 
 —una exigencia del capítulo 7.2.4 del manual que no es evidente leyendo solo el
 esquema—. Lo validé contra el XSD oficial con `lxml`.
 
-### Envío reanudable que no duplica comprobantes
+### Envío reanudable que no duplica documentos
 
 El sistema está pensado para hosting compartido y conexiones inestables. El envío se
 apoya en dos colas en MySQL, `fe_queue` (generación) y `email_queue` (envío), que se
@@ -94,8 +100,8 @@ procesan documento a documento y guardan el estado de cada uno.
 
 Si la conexión se corta a mitad de una tanda, el lote queda **suspendido** en lugar
 de fallar entero; al reanudar, continúa por donde iba sin reenviar lo ya enviado ni
-regenerar comprobantes con CDC nuevo. Cada transición queda registrada en
-`invoice_events`, lo que permite auditar qué pasó con cada factura.
+regenerar documentos con CDC nuevo. Cada transición queda registrada en
+`invoice_events`, lo que permite auditar qué pasó con cada uno.
 
 ### Cliente SMTP sobre sockets
 
@@ -153,11 +159,11 @@ obligó a implementar a mano lo que normalmente se resolvería con una librería
 
 | Herramienta | Para qué |
 | --- | --- |
-| **PHP 8.1** | Lenguaje; toda la lógica fiscal |
+| **PHP 8.1** | Lenguaje; toda la lógica de la especificación |
 | **ext-openssl** | Firma RSA-SHA256, certificados X.509 y P12/PEM |
 | **ext-dom** + DOMXPath | Construcción y firma del XML |
 | **ext-curl** / SOAP | Web services de la DNIT |
-| **MySQL 8 / MariaDB** | Facturas, clientes, colas y trazas de eventos |
+| **MySQL 8 / MariaDB** | Documentos, receptores, colas y trazas de eventos |
 | **Apache / cPanel** | Despliegue en hosting compartido |
 | **Autoload propio** | Carga de clases sin Composer |
 | Codificador **QR** propio | ISO/IEC 18004; sustituye a una librería de QR |
@@ -193,4 +199,4 @@ Por seguridad y peso, quedaron fuera al publicar:
 ## Pendiente de completar
 
 - [ ] Capturas: interfaz de carga, pestaña de envío y un KuDE generado
-- [ ] Resultado medible: comprobantes emitidos, tiempo de emisión, tasa de aprobación
+- [ ] Resultado medible: documentos emitidos, tiempo de emisión, tasa de aprobación

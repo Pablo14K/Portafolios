@@ -77,7 +77,7 @@ ISO/IEC 18004 (Reed-Solomon sobre GF(256), validado contra la librería `qrcode`
 Python), un generador de PDF con una paginación definida por especificación, firma
 XMLDSig con RSA-SHA256 y X.509, y un sistema de colas que reanuda envíos interrumpidos
 sin duplicar documentos. ~6.500 líneas de PHP.
-→ [Ficha](../proyectos/sifen-facturacion-electronica)
+→ [Ficha](../proyectos/sifen-integracion)
 
 ### Sistema de Gestión para Peluquería (2026, en producción)
 Aplicación web Laravel 13 de gestión integral y multisucursal —agenda, clientes,
