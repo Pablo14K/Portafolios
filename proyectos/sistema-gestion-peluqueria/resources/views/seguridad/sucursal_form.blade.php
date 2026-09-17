@@ -1,0 +1,62 @@
+@extends('layout.app')
+
+@section('titulo', $s ? 'Editar sucursal' : 'Nueva sucursal')
+
+@section('contenido')
+    @php $id = $s->id_sucursal ?? 0; @endphp
+
+    <div class="sgp-page-head">
+        <a class="sgp-back" href="{{ route('seguridad.sucursales') }}">
+            <i class="bi bi-arrow-left"></i> Sucursales</a>
+        <h1 class="mt-1">{{ $id ? 'Editar sucursal' : 'Nueva sucursal' }}</h1>
+    </div>
+
+    <div class="sgp-panel" style="max-width:640px">
+        <form method="post" action="{{ route('seguridad.sucursal.guardar') }}">
+            @csrf
+            <input type="hidden" name="id_sucursal" value="{{ $id }}">
+
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <label class="form-label" for="nombre">Nombre *</label><x-ayuda campo="nombre" />
+                    <input class="form-control" id="nombre" name="nombre" required
+                           value="{{ old('nombre', $s->nombre ?? '') }}">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label" for="ruc">RUC</label><x-ayuda>Se imprime en el comprobante.</x-ayuda>
+                    <input class="form-control" id="ruc" name="ruc" data-solo="ruc" inputmode="text" value="{{ old('ruc', $s->ruc ?? '') }}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="telefono">Teléfono</label><x-ayuda campo="telefono" />
+                    <input class="form-control" id="telefono" name="telefono" data-solo="telefono" inputmode="tel"
+                           value="{{ old('telefono', $s->telefono ?? '') }}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ciudad">Ciudad</label><x-ayuda campo="ciudad" />
+                    {{-- **Sin valor por defecto.** Venía con «Luque» escrito, así que
+                         una sucursal nueva nacía con la ciudad de la casa central
+                         puesta: quien no la mirara la guardaba mal, y el campo
+                         parecía ya contestado. --}}
+                    <x-ciudad :valor="old('ciudad', $s->ciudad ?? '')" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="direccion">Dirección</label><x-ayuda campo="direccion" />
+                    <input class="form-control" id="direccion" name="direccion"
+                           value="{{ old('direccion', $s->direccion ?? '') }}">
+                </div>
+            </div>
+
+            <div class="mt-4 d-flex gap-2">
+                <button class="btn btn-acento"><i class="bi bi-check-lg"></i> Guardar</button>
+                <a class="btn btn-outline-neutro" href="{{ route('seguridad.sucursales') }}">Cancelar</a>
+            </div>
+        </form>
+    </div>
+@endsection
+
+@once
+    {{-- **Ciudades sugeridas.** Va como `<datalist>` y no como `<select>` a
+         propósito: sugiere las de siempre y deja escribir cualquier otra. Un
+         selector cerrado obligaría a mantener el padrón entero del país para
+         que alguien pueda poner su localidad. --}}
+@endonce

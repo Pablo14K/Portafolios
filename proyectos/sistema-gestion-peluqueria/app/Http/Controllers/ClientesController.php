@@ -1,0 +1,766 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Controllers;
+
+use App\Servicios\Sucursales;
+use App\Servicios\Auditoria;
+use App\Servicios\Bd;
+use App\Servicios\Canje;
+use App\Servicios\Listado;
+use App\Servicios\Permisos;
+use App\Servicios\Persona;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
+
+class ClientesController extends Controller
+{
+    public function index(): View
+    {
+        return view('clientes.index', [
+            'subs' => Permisos::tarjetasPermitidas([
+                ['p' => 'clientes.registro', 'ruta' => 'clientes.lista', 'ic' => 'people',
+                 't' => 'Clientes', 'd' => 'Registro y datos de contacto'],
+                // **Quién junta cuántos puntos es de Clientes**: la pantalla
+                // lista personas. Lo que se administra en Promociones son los
+                // parámetros —desde cuántas visitas arranca cada nivel y cuánto
+                // vale un punto—, que es fijar la regla y no mirar a quién le
+                // tocó.
+                ['p' => 'clientes.fidelizacion', 'ruta' => 'clientes.fidelizacion', 'ic' => 'award',
+                 't' => 'Visitas y puntos', 'd' => 'Quién junta cuántos, y en qué nivel está'],
+                ['p' => 'clientes.canjes', 'ruta' => 'clientes.canjes', 'ic' => 'gift',
+                 't' => 'Canjes por puntos', 'd' => 'Qué se lleva la clienta con sus puntos'],
+                ['p' => 'clientes.valoraciones', 'ruta' => 'clientes.valoraciones', 'ic' => 'star',
+                 't' => 'Valoraciones', 'd' => 'Calificaciones de los servicios'],
+            ]),
+        ]);
+    }
+
+    public function lista(): View|StreamedResponse
+    {
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar',
+                    'ph' => 'Nombre, cédula, teléfono o email', 'ancho' => '300px'],
+            'estado' => ['tipo' => 'select', 'etiqueta' => 'Estado',
+                         'opciones' => ['' => 'Todos', '1' => 'Activos', '0' => 'Inactivos']],
+            'nivel' => ['tipo' => 'select', 'etiqueta' => 'Nivel',
+                        'opciones' => ['' => 'Todos'] + $this->niveles()],
+        ]);
+        $f['csv'] = true;
+
+        // El WHERE se arma una sola vez y lo comparten el COUNT y la lista: si
+        // se separaran, el «de 137» del pie podría no coincidir con lo que se ve.
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(
+                ["CONCAT(pe.nombre,' ',pe.apellido)", 'pe.cedula', 'pe.telefono', 'pe.email'],
+                Listado::valor($f, 'q'), 'q', $par
+            );
+        }
+        if (Listado::hay($f, 'estado')) {
+            $w[] = 'c.activo = :est';
+            $par['est'] = (int) Listado::valor($f, 'estado');
+        }
+        if (Listado::hay($f, 'nivel')) {
+            $w[] = 'fn_cliente_nivel(c.id_cliente) = :niv';
+            $par['niv'] = (int) Listado::valor($f, 'nivel');
+        }
+
+        $desde = 'FROM cliente c JOIN persona pe ON pe.id_persona = c.id_persona WHERE ' . implode(' AND ', $w);
+        // **Las visitas ya no salen de acá.** Se miran en Promociones →
+        // Visitas y puntos, junto con el nivel y los puntos, que es lo que las
+        // hace significar algo; ese listado tiene su propia exportación con las
+        // tres columnas. Acá era una llamada a `fn_cliente_visitas` por fila
+        // para un número que se leía mejor en el otro lado.
+        // **La ficha se mira sin entrar a editarla**, así que la lista trae lo
+        // que el modal muestra. Son columnas planas de dos tablas que ya están
+        // unidas: no agrega ni una consulta por fila.
+        //
+        // **Lo que NO entra son el nivel, las visitas y los puntos.** Ésos
+        // salen de `fn_cliente_*`, o sea una llamada por fila, y se miran donde
+        // significan algo: Clientes → Visitas y puntos.
+        $cols = 'c.id_cliente, pe.nombre, pe.apellido, pe.cedula, pe.telefono, pe.email, '
+              . 'pe.direccion, pe.foto, c.alergias, c.observaciones, c.activo';
+        $orden = 'ORDER BY pe.apellido, pe.nombre';
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('clientes',
+                ['Cliente', 'Cédula', 'Teléfono', 'Email', 'Estado'],
+                array_map(fn ($c) => [
+                    $c->apellido . ', ' . $c->nombre, $c->cedula, $c->telefono, $c->email,
+                    $c->activo ? 'Activo' : 'Inactivo',
+                ], DB::select("SELECT $cols $desde $orden", $par)),
+                $f, 'Clientes'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+        $clientes = DB::select("SELECT $cols $desde $orden LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par);
+
+        return view('clientes.lista', compact('clientes', 'f', 'pag'));
+    }
+
+    public function form(int $id = 0): View|RedirectResponse
+    {
+        $c = $id ? $this->cliente($id) : null;
+        if ($id && ! $c) {
+            flash('Cliente no encontrado.', 'error');
+
+            return redirect()->route('clientes.lista');
+        }
+
+        return view('clientes.form', ['c' => $c]);
+    }
+
+    public function guardar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cliente', 0);
+        $datos = [
+            'nombre' => trim((string) $request->input('nombre', '')),
+            'apellido' => trim((string) $request->input('apellido', '')),
+            'cedula' => trim((string) $request->input('cedula', '')) ?: null,
+            'ruc' => trim((string) $request->input('ruc', '')) ?: null,
+            'telefono' => trim((string) $request->input('telefono', '')) ?: null,
+            'email' => trim((string) $request->input('email', '')) ?: null,
+            'fecha_nacimiento' => $request->input('fecha_nacimiento') ?: null,
+            // `persona.direccion` existía y no la capturaba ninguna pantalla:
+            // la columna quedaba siempre vacía.
+            'direccion' => trim((string) $request->input('direccion', '')) ?: null,
+            'observaciones' => trim((string) $request->input('observaciones', '')) ?: null,
+            // **Las alergias tienen su propio campo y no van en observaciones.**
+            // Ahí quedaban mezcladas con «prefiere las 10» y «vino con su hija»,
+            // y quien prepara la mezcla no las veía. El dato tiene una
+            // consecuencia distinta de todas las demás notas —puede lastimar a
+            // alguien— así que se guarda aparte y la pantalla lo destaca.
+            'alergias' => trim((string) $request->input('alergias', '')) ?: null,
+        ];
+        $volver = $id ? redirect()->route('clientes.form', $id) : redirect()->route('clientes.form');
+
+        $error = null;
+        if ($datos['nombre'] === '' || $datos['apellido'] === '') {
+            $error = 'Nombre y apellido son obligatorios.';
+        } elseif ($datos['email'] && ! filter_var($datos['email'], FILTER_VALIDATE_EMAIL)) {
+            $error = 'El email no tiene un formato válido.';
+        } elseif ($datos['fecha_nacimiento'] && (! strtotime($datos['fecha_nacimiento']) || $datos['fecha_nacimiento'] > date('Y-m-d'))) {
+            $error = 'La fecha de nacimiento no es válida.';
+        } else {
+            $error = Persona::error($datos);
+        }
+
+        // La cédula y el RUC son únicos a nivel de persona, no de cliente: si
+        // ya existen, puede ser la misma persona cargada como empleada.
+        $personaActual = $id ? (int) DB::scalar('SELECT id_persona FROM cliente WHERE id_cliente = ?', [$id]) : 0;
+        if (! $error) {
+            $choque = Persona::porDocumento($datos['cedula'], $datos['ruc'], $personaActual);
+            if ($choque) {
+                $yaCliente = (int) DB::scalar('SELECT COUNT(*) FROM cliente WHERE id_persona = ?', [$choque]);
+                $error = $yaCliente
+                    ? 'Ya existe otro cliente con esa cédula o ese RUC.'
+                    : 'Esa cédula o RUC ya está cargada en el sistema (como personal o proveedor). Revisá los datos.';
+            }
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->withInput();
+        }
+
+        try {
+            DB::transaction(function () use ($id, $datos, $personaActual) {
+                if ($id) {
+                    Persona::guardar($personaActual, $datos);
+                    DB::update('UPDATE cliente SET observaciones = :obs, alergias = :ale WHERE id_cliente = :id',
+                        ['obs' => $datos['observaciones'], 'ale' => $datos['alergias'], 'id' => $id]);
+                    Auditoria::registrar('MODIFICACION', 'Clientes', 'cliente', $id,
+                        $datos['nombre'] . ' ' . $datos['apellido']);
+                    flash('Cliente actualizado.');
+                } else {
+                    $idPersona = Persona::guardar(null, $datos);
+                    DB::insert('INSERT INTO cliente (id_persona, observaciones, alergias) VALUES (?,?,?)',
+                        [$idPersona, $datos['observaciones'], $datos['alergias']]);
+                    Auditoria::registrar('ALTA', 'Clientes', 'cliente', (int) DB::getPdo()->lastInsertId(),
+                        $datos['nombre'] . ' ' . $datos['apellido']);
+                    flash('Cliente registrado.');
+                }
+            });
+        } catch (Throwable) {
+            flash('No se pudo guardar (¿cédula o RUC duplicado?).', 'error');
+
+            return $volver->withInput();
+        }
+
+        return redirect()->route('clientes.lista');
+    }
+
+    /** Baja lógica: nunca se borra, porque el historial lo referencia. */
+    public function baja(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cliente', 0);
+        $c = DB::selectOne(
+            'SELECT pe.nombre, pe.apellido, c.activo FROM cliente c
+               JOIN persona pe ON pe.id_persona = c.id_persona WHERE c.id_cliente = ?', [$id]
+        );
+        if (! $c) {
+            flash('Ese cliente no existe.', 'error');
+
+            return redirect()->route('clientes.lista');
+        }
+
+        // Al desactivar, avisar si tiene citas pendientes: se le estaría
+        // cerrando la ficha a alguien que ya tiene turno dado.
+        if ((int) $c->activo === 1) {
+            $pend = (int) DB::scalar(
+                'SELECT COUNT(*) FROM cita c JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+                  WHERE c.id_cliente = ? AND ec.bloquea_agenda = 1 AND c.fecha_hora >= NOW()', [$id]
+            );
+            if ($pend) {
+                flash("Ojo: {$c->nombre} tiene $pend cita(s) futura(s) sin atender.", 'warning');
+            }
+        }
+
+        DB::update('UPDATE cliente SET activo = 1 - activo WHERE id_cliente = ?', [$id]);
+        Auditoria::registrar('MODIFICACION', 'Clientes', 'cliente', $id,
+            ((int) $c->activo ? 'Desactivó' : 'Activó') . ' a ' . $c->nombre . ' ' . $c->apellido);
+        flash('Estado del cliente actualizado.');
+
+        return redirect()->route('clientes.lista');
+    }
+
+    // La firma lleva `StreamedResponse` porque ahora la pantalla también
+    // devuelve un archivo: con `: View` a secas, exportar revienta con un
+    // TypeError que NO se ve abriendo la pantalla, sólo al apretar el botón —
+    // que es exactamente cómo Auditoría estuvo rota durante versiones.
+    public function historial(int $id): View|RedirectResponse|StreamedResponse
+    {
+        $c = $this->cliente($id);
+        if (! $c) {
+            flash('Cliente no encontrado.', 'error');
+
+            return redirect()->route('clientes.lista');
+        }
+
+        // **El historial no paginaba, y es la tabla que más crece del
+        // sistema.** Una clienta habitual pasa las cien filas en un año y se
+        // dibujaban todas: la pantalla se volvía impracticable justo con la
+        // clienta sobre la que más hay para mirar. Va con el prototipo de
+        // listado, como el resto — mismos filtros, misma paginación, misma
+        // exportación.
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Servicio o profesional'],
+            'desde' => ['tipo' => 'fecha', 'etiqueta' => 'Desde'],
+            'hasta' => ['tipo' => 'fecha', 'etiqueta' => 'Hasta'],
+        ]);
+
+        $w = ['id_cliente = :cli'];
+        $par = ['cli' => $id];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(['servicio', 'profesional'], Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'desde')) {
+            $w[] = 'fecha_hora >= :desde';
+            $par['desde'] = Listado::valor($f, 'desde') . ' 00:00:00';
+        }
+        if (Listado::hay($f, 'hasta')) {
+            $w[] = 'fecha_hora <= :hasta';
+            $par['hasta'] = Listado::valor($f, 'hasta') . ' 23:59:59';
+        }
+        // El WHERE se arma UNA vez y lo comparten el conteo y la página: si se
+        // separan, el «de 137» del pie deja de coincidir con lo que se ve.
+        $desde = 'FROM vw_historial_cliente WHERE ' . implode(' AND ', $w);
+
+        if (Listado::pideExport()) {
+            return Listado::exportar(
+                'historial-' . $id,
+                ['Fecha', 'Servicio', 'Profesional', 'Comprobante', 'Puntaje'],
+                array_map(fn ($h) => [fecha($h->fecha_hora), $h->servicio, $h->profesional,
+                                      $h->nro_comprobante ?: '', $h->puntaje ?: ''],
+                    DB::select("SELECT * $desde ORDER BY fecha_hora DESC", $par)),
+                $f,
+                'Historial de ' . $c->nombre . ' ' . $c->apellido
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+
+        return view('clientes.historial', [
+            'c' => $c,
+            'f' => $f,
+            'pag' => $pag,
+            'hist' => DB::select(
+                "SELECT * $desde ORDER BY fecha_hora DESC LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par
+            ),
+            'fid' => DB::selectOne('SELECT * FROM vw_cliente_fidelizacion WHERE id_cliente = ?', [$id]),
+            'pref' => DB::select('SELECT * FROM preferencia_cliente WHERE id_cliente = ? ORDER BY fecha_registro DESC', [$id]),
+        ] + $this->perfilCliente($id));
+    }
+
+    /**
+     * El perfil de una clienta: qué se hace, cuándo viene y con quién.
+     *
+     * **La tabla del historial contesta «qué pasó tal día» y no «cómo es esta
+     * clienta».** Con cien filas paginadas de a veinticinco, saber que siempre
+     * pide lo mismo, que viene los sábados a la mañana o que se atiende con la
+     * misma persona exige leerlas todas y llevar la cuenta a mano — que es
+     * justamente lo que una pantalla tiene que ahorrar. Son las preguntas que
+     * el mostrador se hace antes de atender: qué ofrecerle, cuándo llamarla y a
+     * quién asignarle.
+     *
+     * **Sale del historial completo, no de la página que se está viendo, y
+     * NO respeta los filtros de la tabla.** Es a propósito y es la diferencia
+     * con el resumen de un informe: acá no es un total de lo filtrado sino el
+     * perfil de la persona, y filtrado por un mes cualquiera diría que su
+     * servicio favorito es el único que se hizo ese mes.
+     *
+     * El día va **1 = lunes … 7 = domingo** (`WEEKDAY()+1`), la convención del
+     * proyecto: `DAYOFWEEK()` arranca en domingo y corre todo un día.
+     *
+     * @return array<string, mixed>
+     */
+    private function perfilCliente(int $id): array
+    {
+        $par = ['cli' => $id];
+
+        return [
+            // Lo que más pide, con cuánto gastó en eso: dos servicios con la
+            // misma cantidad de veces no valen lo mismo para el salón.
+            'favoritos' => DB::select(
+                'SELECT servicio, COUNT(*) AS veces, SUM(precio) AS gastado, MAX(fecha_hora) AS ultima
+                   FROM vw_historial_cliente WHERE id_cliente = :cli
+                  GROUP BY servicio ORDER BY veces DESC, gastado DESC LIMIT 5', $par),
+
+            // **Por CITA y no por servicio**: una cita con cuatro servicios es
+            // una sola visita, y contando renglones ese día pesaría cuatro
+            // veces más que otro en el que pidió una sola cosa.
+            'porDia' => DB::select(
+                'SELECT WEEKDAY(fecha_hora) + 1 AS dia, COUNT(DISTINCT id_cita) AS visitas
+                   FROM vw_historial_cliente WHERE id_cliente = :cli
+                  GROUP BY WEEKDAY(fecha_hora) + 1 ORDER BY visitas DESC, dia', $par),
+
+            'porHora' => DB::select(
+                'SELECT HOUR(fecha_hora) AS hora, COUNT(DISTINCT id_cita) AS visitas
+                   FROM vw_historial_cliente WHERE id_cliente = :cli
+                  GROUP BY HOUR(fecha_hora) ORDER BY visitas DESC, hora', $par),
+
+            'conQuien' => DB::select(
+                'SELECT profesional, COUNT(DISTINCT id_cita) AS visitas
+                   FROM vw_historial_cliente
+                  WHERE id_cliente = :cli AND profesional IS NOT NULL
+                  GROUP BY profesional ORDER BY visitas DESC LIMIT 4', $par),
+
+            // El resumen de arriba. `gastado` sale de los precios del
+            // historial, así que es lo facturado y no lo cobrado: son dos
+            // números distintos y el rótulo lo dice.
+            'perfil' => DB::selectOne(
+                'SELECT COUNT(DISTINCT id_cita) AS visitas, COUNT(*) AS servicios,
+                        SUM(precio) AS gastado, MIN(fecha_hora) AS primera, MAX(fecha_hora) AS ultima,
+                        -- Cada cuántos días viene, en promedio. Con una sola visita
+                        -- no hay intervalo que medir y queda en NULL, que la
+                        -- pantalla dice como «todavía no se puede saber».
+                        CASE WHEN COUNT(DISTINCT DATE(fecha_hora)) > 1
+                             THEN ROUND(DATEDIFF(MAX(fecha_hora), MIN(fecha_hora))
+                                        / (COUNT(DISTINCT DATE(fecha_hora)) - 1))
+                        END AS cada_dias
+                   FROM vw_historial_cliente WHERE id_cliente = :cli', $par),
+        ];
+    }
+
+    // -----------------------------------------------------------------
+    //  Canjes por puntos
+    //
+    //  El catálogo de lo que el salón regala a cambio de puntos. Es su propio
+    //  permiso (`clientes.canjes`) porque decidir por cuántos puntos se regala
+    //  un servicio es fijar precio, no consultar fidelización.
+    // -----------------------------------------------------------------
+
+    public function canjes(): View
+    {
+        return view('clientes.canjes', [
+            'rows' => Canje::catalogo(false),
+            // Para elegir en qué locales vale el canje. Con una sola sucursal
+            // el bloque no se dibuja: no hay nada que elegir.
+            'sucursales' => DB::select('SELECT id_sucursal, nombre FROM sucursal WHERE activo = 1 ORDER BY nombre'),
+            // Los que todavía no están en el catálogo: no tiene sentido
+            // ofrecer dos veces el mismo servicio.
+            'servicios' => DB::select(
+                'SELECT s.id_servicio, s.nombre, s.precio, cs.nombre AS categoria
+                   FROM servicio s
+                   JOIN categoria_servicio cs ON cs.id_categoria_servicio = s.id_categoria_servicio
+                  WHERE s.activo = 1
+                    AND NOT EXISTS (SELECT 1 FROM servicio_canjeable x WHERE x.id_servicio = s.id_servicio)
+                  ORDER BY cs.nombre, s.nombre'
+            ),
+            // Lo que las clientas ya canjearon, para ver si el programa se usa.
+            'canjeados' => DB::select(
+                "SELECT c.id_canje, c.puntos, c.fecha, c.vence_en,
+                        fn_canje_estado(c.id_canje) AS estado,
+                        s.nombre AS servicio,
+                        CONCAT(pe.nombre,' ',pe.apellido) AS cliente
+                   FROM canje c
+                   JOIN servicio s ON s.id_servicio = c.id_servicio
+                   JOIN cliente cl ON cl.id_cliente = c.id_cliente
+                   JOIN persona pe ON pe.id_persona = cl.id_persona
+                  ORDER BY c.fecha DESC LIMIT 50"
+            ),
+        ]);
+    }
+
+    public function canjeGuardar(Request $request): RedirectResponse
+    {
+        $idServicio = (int) $request->input('id_servicio', 0);
+        $puntos = entero($request->input('puntos'));
+        $dias = entero($request->input('dias_vigencia'));
+        $volver = redirect()->route('clientes.canjes');
+
+        $error = null;
+        if (! $idServicio || ! DB::scalar('SELECT COUNT(*) FROM servicio WHERE id_servicio = ? AND activo = 1', [$idServicio])) {
+            $error = 'Elegí un servicio activo.';
+        } elseif ($puntos <= 0) {
+            $error = 'Los puntos tienen que ser más que cero.';
+        } elseif ($dias < 1 || $dias > 365) {
+            $error = 'La vigencia va de 1 a 365 días.';
+        } elseif (DB::scalar('SELECT COUNT(*) FROM servicio_canjeable WHERE id_servicio = ?', [$idServicio])) {
+            $error = 'Ese servicio ya está en la lista de canjes. Editalo en vez de agregarlo de nuevo.';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->withInput();
+        }
+
+        // **A qué locales aplica el canje.** Sin marcar ninguno se entiende que
+        // vale en todos: es lo que espera quien tiene un solo local, y evita
+        // que un canje quede creado sin poder usarse en ningún lado.
+        $sucursales = array_values(array_filter(array_map('intval', (array) $request->input('sucursales', []))));
+        if (! $sucursales) {
+            $sucursales = array_map(fn ($s) => (int) $s->id_sucursal,
+                DB::select('SELECT id_sucursal FROM sucursal WHERE activo = 1'));
+        }
+
+        try {
+            DB::insert('INSERT INTO servicio_canjeable (id_servicio, puntos, dias_vigencia, activo) VALUES (?,?,?,1)',
+                [$idServicio, $puntos, $dias]);
+            $idCanjeable = (int) DB::getPdo()->lastInsertId();
+
+            foreach ($sucursales as $idSuc) {
+                DB::insert('INSERT IGNORE INTO canjeable_sucursal (id_servicio_canjeable, id_sucursal) VALUES (?,?)',
+                    [$idCanjeable, $idSuc]);
+            }
+
+            $nombre = (string) DB::scalar('SELECT nombre FROM servicio WHERE id_servicio = ?', [$idServicio]);
+            Auditoria::registrar('ALTA', 'Clientes', 'servicio_canjeable', $idCanjeable,
+                $nombre . ' por ' . $puntos . ' puntos, con ' . $dias . ' día(s) de vigencia'
+                . ' — en ' . count($sucursales) . ' sucursal(es)');
+            flash($nombre . ' ya se puede canjear por ' . $puntos . ' puntos'
+                . (count($sucursales) > 1 ? ' en ' . count($sucursales) . ' sucursales.' : '.'));
+        } catch (Throwable $ex) {
+            flash('No se pudo agregar el canje. El detalle quedó registrado.', 'error');
+            Log::error('Alta de servicio canjeable', ['error' => $ex->getMessage()]);
+        }
+
+        return $volver;
+    }
+
+    public function canjeEditar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_servicio_canjeable', 0);
+        $puntos = entero($request->input('puntos'));
+        $dias = entero($request->input('dias_vigencia'));
+        $volver = redirect()->route('clientes.canjes');
+
+        $fila = DB::selectOne(
+            'SELECT sc.*, s.nombre FROM servicio_canjeable sc
+               JOIN servicio s ON s.id_servicio = sc.id_servicio
+              WHERE sc.id_servicio_canjeable = ?', [$id]
+        );
+        if (! $fila) {
+            flash('Ese canje no existe.', 'error');
+
+            return $volver;
+        }
+        if ($puntos <= 0 || $dias < 1 || $dias > 365) {
+            flash('Los puntos tienen que ser más que cero y la vigencia ir de 1 a 365 días.', 'error');
+
+            return $volver;
+        }
+
+        DB::update('UPDATE servicio_canjeable SET puntos = ?, dias_vigencia = ? WHERE id_servicio_canjeable = ?',
+            [$puntos, $dias, $id]);
+
+        // **Lo ya canjeado no cambia**: `canje` guardó los puntos y el
+        // vencimiento acordados. Cambiar el catálogo no le mueve el piso a
+        // quien ya canjeó.
+        Auditoria::registrar('MODIFICACION', 'Clientes', 'servicio_canjeable', $id,
+            $fila->nombre . ': de ' . (int) $fila->puntos . ' a ' . $puntos . ' puntos, '
+            . 'vigencia de ' . (int) $fila->dias_vigencia . ' a ' . $dias . ' día(s)');
+        flash('Canje actualizado. Lo que ya se canjeó conserva sus condiciones.');
+
+        return $volver;
+    }
+
+    public function canjeBaja(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_servicio_canjeable', 0);
+        DB::update('UPDATE servicio_canjeable SET activo = 1 - activo WHERE id_servicio_canjeable = ?', [$id]);
+        Auditoria::registrar('MODIFICACION', 'Clientes', 'servicio_canjeable', $id, 'Alta/baja del canje');
+        flash('Listo. Los canjes que las clientas ya hicieron siguen valiendo.');
+
+        return redirect()->route('clientes.canjes');
+    }
+
+    /**
+     * Canjear los puntos de una clienta **desde el mostrador**.
+     *
+     * No todas las clientas usan el portal —la mayoría entra por teléfono y ni
+     * siquiera tiene cuenta—, así que la que viene al local y pide gastar sus
+     * puntos tiene que poder hacerlo ahí mismo, con quien la atiende.
+     *
+     * **Pide `clientes.fidelizacion`, no `clientes.canjes`**, y la diferencia
+     * importa: canjear POR una clienta es una acción del mostrador, y decidir
+     * por cuántos puntos el salón regala un servicio es fijar precio. El
+     * Profesional tiene la primera y no la segunda.
+     *
+     * Pasa por el mismo `sp_canjear_servicio` que el portal: mismo candado,
+     * mismas validaciones y mismo descuento de puntos. Lo único distinto es
+     * quién aprieta el botón, y eso queda en la auditoría.
+     */
+    public function canjearPara(Request $request): RedirectResponse
+    {
+        $idCliente = (int) $request->input('id_cliente', 0);
+        $idServicio = (int) $request->input('id_servicio', 0);
+        $volver = redirect()->route('clientes.fidelizacion');
+
+        $cliente = DB::selectOne(
+            "SELECT cl.id_cliente, CONCAT(pe.nombre,' ',pe.apellido) AS nombre
+               FROM cliente cl JOIN persona pe ON pe.id_persona = cl.id_persona
+              WHERE cl.id_cliente = ? AND cl.activo = 1", [$idCliente]
+        );
+        if (! $cliente) {
+            flash('Esa clienta no existe o está dada de baja.', 'error');
+
+            return $volver;
+        }
+
+        try {
+            $idCanje = Canje::canjear($idCliente, $idServicio);
+            $c = DB::selectOne(
+                'SELECT s.nombre, cj.puntos, cj.vence_en FROM canje cj
+                   JOIN servicio s ON s.id_servicio = cj.id_servicio
+                  WHERE cj.id_canje = ?', [$idCanje]
+            );
+
+            Auditoria::registrar('CANJE', 'Clientes', 'canje', $idCanje,
+                $cliente->nombre . ' canjeó ' . ($c->nombre ?? '') . ' por '
+                . (int) ($c->puntos ?? 0) . ' puntos (desde el mostrador)');
+
+            flash('Listo: ' . $cliente->nombre . ' canjeó ' . ($c->nombre ?? 'el servicio')
+                . '. Le quedan ' . Canje::puntos($idCliente) . ' punto(s), y tiene hasta el '
+                . fecha($c->vence_en ?? null, 'd/m/Y') . ' para usarlo. '
+                . 'Aparece al agendarle la cita.');
+        } catch (Throwable $ex) {
+            flash(Bd::traducir($ex, [
+                'no alcanzan' => 'A ' . $cliente->nombre . ' no le alcanzan los puntos para ese canje: '
+                                 . 'tiene ' . Canje::puntos($idCliente) . '.',
+                'no se puede canjear' => 'Ese servicio no está en la lista de canjes.',
+            ], 'No se pudo hacer el canje. El detalle quedó registrado.'), 'error');
+
+            if (! str_contains($ex->getMessage(), 'alcanzan') && ! str_contains($ex->getMessage(), 'canjear')) {
+                Log::error('Canje desde el mostrador', ['cliente' => $idCliente, 'error' => $ex->getMessage()]);
+            }
+        }
+
+        return $volver;
+    }
+
+    public function fidelizacion(): View|StreamedResponse
+    {
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Nombre del cliente', 'ancho' => '240px'],
+            'nivel' => ['tipo' => 'select', 'etiqueta' => 'Nivel',
+                        'opciones' => ['' => 'Todos'] + $this->nivelesPorNombre()],
+            'minvis' => ['tipo' => 'numero', 'etiqueta' => 'Visitas desde', 'ph' => '0', 'ancho' => '130px'],
+        ]);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(['v.cliente', 'v.telefono'], Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'nivel')) {
+            $w[] = 'v.nivel = :n';
+            $par['n'] = Listado::valor($f, 'nivel');
+        }
+        if (Listado::hay($f, 'minvis')) {
+            $w[] = 'v.visitas >= :mv';
+            $par['mv'] = (int) Listado::valor($f, 'minvis');
+        }
+
+        $desde = 'FROM vw_cliente_fidelizacion v WHERE ' . implode(' AND ', $w);
+        $orden = 'ORDER BY v.visitas DESC, v.cliente';
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('fidelizacion',
+                ['Cliente', 'Visitas', 'Puntos', 'Nivel', 'Descuento del nivel'],
+                array_map(fn ($r) => [$r->cliente, $r->visitas, $r->puntos, $r->nivel, $r->descuento_del_nivel],
+                    DB::select("SELECT * $desde $orden", $par)),
+                $f, 'Fidelización'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+
+        $canjeables = Canje::catalogo();
+
+        return view('clientes.fidelizacion', [
+            'rows' => DB::select("SELECT * $desde $orden LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            'f' => $f,
+            'pag' => $pag,
+            // **Los niveles se mudaron a Promociones.** Acá se contestaba
+            // «¿cómo funciona el programa?» y también «¿quién tiene cuántos
+            // puntos?», y la primera ya la contestaba Promociones con el valor
+            // del punto: la misma información en dos pantallas, que es lo que
+            // se reportó. Esta queda con lo operativo —el listado y el canje
+            // desde el mostrador— y aquélla con las reglas.
+            // Para canjear desde el mostrador: la clienta que viene al local y
+            // pide gastar sus puntos no tiene por qué entrar al portal —la
+            // mayoría ni siquiera tiene cuenta—.
+            'canjeables' => $canjeables,
+            // El canje más barato del catálogo: con menos puntos que eso no hay
+            // nada que ofrecerle, y el botón no se dibuja. Un botón que abre un
+            // modal donde todo dice «no te alcanza» es el mismo cartel que
+            // promete y no cumple.
+            'canjeMasBarato' => $canjeables
+                ? min(array_map(fn ($c) => (int) $c->puntos, $canjeables))
+                : PHP_INT_MAX,
+        ]);
+    }
+
+    public function valoraciones(): View|StreamedResponse
+    {
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Cliente o comentario', 'ancho' => '240px'],
+            'prof' => ['tipo' => 'select', 'etiqueta' => 'Profesional', 'ancho' => '190px',
+                       'opciones' => ['' => 'Todos'] + $this->profesionales()],
+            'puntaje' => ['tipo' => 'select', 'etiqueta' => 'Puntaje',
+                          'opciones' => ['' => 'Todos', '5' => '5 ★', '4' => '4 ★', '3' => '3 ★', '2' => '2 ★', '1' => '1 ★']],
+            'desde' => ['tipo' => 'fecha', 'etiqueta' => 'Desde'],
+            'hasta' => ['tipo' => 'fecha', 'etiqueta' => 'Hasta'],
+        ]);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(["CONCAT(pe_cl.nombre,' ',pe_cl.apellido)", 'cal.comentario'],
+                Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'prof')) {
+            $w[] = 'c.id_usuario = :p';
+            $par['p'] = (int) Listado::valor($f, 'prof');
+        }
+        if (Listado::hay($f, 'puntaje')) {
+            $w[] = 'cal.puntaje = :pt';
+            $par['pt'] = (int) Listado::valor($f, 'puntaje');
+        }
+        if (Listado::hay($f, 'desde')) {
+            $w[] = 'DATE(cal.fecha) >= :d';
+            $par['d'] = Listado::valor($f, 'desde');
+        }
+        if (Listado::hay($f, 'hasta')) {
+            $w[] = 'DATE(cal.fecha) <= :h';
+            $par['h'] = Listado::valor($f, 'hasta');
+        }
+
+        // **La valoración es del local donde la atendieron.** Cuelga de la
+        // cita, así que la sucursal no hace falta guardarla: se deduce. Sin
+        // este filtro, la sede 2 leía las quejas de la sede 1 y al revés — y
+        // una valoración se lee para corregir algo que pasó en un lugar.
+        $w[] = '(:suc = 0 OR c.id_sucursal = :suc2)';
+        $par['suc'] = Sucursales::activa();
+        $par['suc2'] = Sucursales::activa();
+
+        $desde = 'FROM calificacion cal
+                  JOIN cita c        ON c.id_cita = cal.id_cita
+                  JOIN cliente cl    ON cl.id_cliente = c.id_cliente
+                  JOIN persona pe_cl ON pe_cl.id_persona = cl.id_persona
+                  JOIN usuario u     ON u.id_usuario = c.id_usuario
+                  JOIN persona pe_u  ON pe_u.id_persona = u.id_persona
+                  WHERE ' . implode(' AND ', $w);
+        $cols = "cal.puntaje, cal.comentario, cal.fecha,
+                 CONCAT(pe_cl.nombre,' ',pe_cl.apellido) AS cliente,
+                 CONCAT(pe_u.nombre,' ',pe_u.apellido) AS profesional";
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('valoraciones',
+                ['Fecha', 'Cliente', 'Profesional', 'Puntaje', 'Comentario'],
+                array_map(fn ($r) => [fecha($r->fecha, 'd/m/Y'), $r->cliente, $r->profesional, $r->puntaje, $r->comentario],
+                    DB::select("SELECT $cols $desde ORDER BY cal.fecha DESC", $par)),
+                $f, 'Valoraciones'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+
+        return view('clientes.valoraciones', [
+            'rows' => DB::select("SELECT $cols $desde ORDER BY cal.fecha DESC LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            // El promedio es el de lo filtrado, no el general: si se mira a una
+            // profesional, el número que interesa es el de ella.
+            'prom' => DB::scalar("SELECT ROUND(AVG(cal.puntaje),2) $desde", $par),
+            'f' => $f,
+            'pag' => $pag,
+        ]);
+    }
+
+    // -----------------------------------------------------------------
+
+    private function cliente(int $id): ?object
+    {
+        return DB::selectOne(
+            'SELECT c.*, pe.nombre, pe.apellido, pe.cedula, pe.ruc, pe.telefono, pe.email,
+                    pe.fecha_nacimiento, pe.direccion
+               FROM cliente c JOIN persona pe ON pe.id_persona = c.id_persona
+              WHERE c.id_cliente = ?', [$id]
+        );
+    }
+
+    private function niveles(): array
+    {
+        $out = [];
+        foreach (DB::select('SELECT id_nivel, nombre FROM nivel ORDER BY visitas_minimas') as $n) {
+            $out[(string) $n->id_nivel] = $n->nombre;
+        }
+
+        return $out;
+    }
+
+    private function nivelesPorNombre(): array
+    {
+        $out = [];
+        foreach (DB::select('SELECT nombre FROM nivel ORDER BY visitas_minimas') as $n) {
+            $out[$n->nombre] = $n->nombre;
+        }
+
+        return $out;
+    }
+
+    private function profesionales(): array
+    {
+        $out = [];
+        foreach (DB::select(
+            "SELECT u.id_usuario, CONCAT(pe.nombre,' ',pe.apellido) n
+               FROM usuario u JOIN persona pe ON pe.id_persona = u.id_persona
+               JOIN rol r ON r.id_rol = u.id_rol WHERE r.es_personal = 1 ORDER BY pe.nombre"
+        ) as $p) {
+            $out[(string) $p->id_usuario] = $p->n;
+        }
+
+        return $out;
+    }
+}

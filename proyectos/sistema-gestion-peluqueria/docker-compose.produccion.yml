@@ -1,0 +1,274 @@
+# El SGP en el VPS. El de desarrollo es `docker-compose.yml`, y son archivos
+# distintos a propósito: aquél publica la base en el 3307 y sirve con
+# `artisan serve`, dos cosas que en un servidor con IP pública van de aceptables
+# a peligrosas.
+#
+#   docker compose -f docker-compose.produccion.yml up -d --build
+#   docker compose -f docker-compose.produccion.yml logs -f
+#   docker compose -f docker-compose.produccion.yml down        (conserva los datos)
+#
+# ===========================================================================
+#  **NO HAY UN SOLO MONTAJE DE HOST, Y ESO ES LO MÁS IMPORTANTE DE ESTE ARCHIVO**
+#
+#  El panel de Hostinger clona el repositorio en `/tmp/hstgr-…` pero corre el
+#  compose con el directorio de proyecto en `/docker/spg`, que está VACÍO. Y
+#  Compose resuelve cada cosa contra un lugar distinto:
+#
+#    · `build.context`  → contra el archivo compose  → el clon      ✔ funciona
+#    · `env_file`       → contra el archivo compose  → el clon      ✔ funciona
+#    · `volumes` (ruta) → contra el DIRECTORIO del proyecto → vacío ✘ se rompe
+#
+#  Un montaje de host ahí no falla de frente: Docker **crea la ruta que falta
+#  como carpeta**, así que `./basededatos:/sql` quedaba vacío y MariaDB arrancaba
+#  **healthy con las bases vacías** —peor que fallar, porque no lo dice nadie— y
+#  `./docker/php/env.produccion:/app/.env` reventaba con «not a directory».
+#
+#  Por eso todo lo que antes se montaba ahora se **hornea en la imagen**, y lo
+#  único que queda son volúmenes con nombre, que no dependen de ninguna ruta del
+#  host. Si algún día se despliega por SSH, esto sigue funcionando igual.
+# ===========================================================================
+#
+# Las cuatro diferencias con el compose de desarrollo:
+#
+#   1. **Ningún puerto de la base ni del SIFEN sale a internet.** Acá sólo Caddy
+#      abre puertos, el 80 y el 443.
+#   2. **Sirve php-fpm detrás de Caddy**, no `artisan serve`.
+#   3. **Las contraseñas vienen de `docker/php/secretos.env`**, que Compose lee
+#      del clon.
+#   4. **Hay un servicio que corre el planificador.** Sin él no salen los
+#      recordatorios, las citas vencidas no se cierran y las señas no se sueltan.
+
+services:
+  bd:
+    build:
+      context: .
+      dockerfile: docker/bd/Dockerfile
+    image: sgp-bd
+    container_name: sgp_bd
+    restart: unless-stopped
+    # **Sin `ports:`.** No es un olvido: así a la base sólo se llega desde la
+    # red interna de Docker. Para entrar a mano:
+    #   docker compose -f docker-compose.produccion.yml exec bd mysql -uroot -p
+    environment:
+      TZ: America/Asuncion
+    env_file:
+      # De acá sale MYSQL_ROOT_PASSWORD.
+      #
+      # **Si falta, Compose aborta con un mensaje claro que nombra el archivo.
+      # Si está pero VACÍO, sigue adelante en silencio** y MariaDB se apaga
+      # apenas arranca. Ese es el caso feo, porque lo que se ve arriba es
+      # «container sgp_bd is unhealthy», que no dice nada. El error de verdad
+      # está en `docker logs sgp_bd`.
+      - ./docker/php/secretos.env
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      # Paraguay quedó fijo en UTC-3 desde que dejó sin efecto el horario de
+      # verano, así que este valor no cambia en marzo ni en octubre. Es lo que
+      # evita que el fichaje de asistencia quede corrido: un VPS recién
+      # instalado corre en UTC, y `ahora_bd()` sella la hora de la BASE.
+      - --default-time-zone=-03:00
+      # Sin esto, con el binlog activo las funciones NO se crean y el import
+      # termina «bien» igual.
+      - --log-bin-trust-function-creators=1
+    volumes:
+      - datos_bd:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile.produccion
+    image: sgp-app
+    container_name: sgp_app
+    restart: unless-stopped
+    depends_on:
+      bd:
+        condition: service_healthy
+    environment:
+      TZ: America/Asuncion
+    env_file:
+      # APP_KEY, DB_PASSWORD, las credenciales del correo y el token del SIFEN.
+      # Sin este archivo el contenedor se apaga a propósito en vez de arrancar
+      # a medias: en el servidor, un sistema andando con la configuración
+      # equivocada es peor que uno que no arrancó.
+      - ./docker/php/secretos.env
+    volumes:
+      # Lo que la aplicación ESCRIBE y tiene que sobrevivir a un despliegue.
+      # El código no está acá: viaja dentro de la imagen.
+      #
+      # `storage` lleva las sesiones, los logs y las copias de los comprobantes
+      # electrónicos (`storage/app/sifen`): perderlo en cada redespliegue sería
+      # perder documentos con valor fiscal.
+      - almacenamiento:/app/storage
+      # Las imágenes que sube el salón. Se comparten con Caddy, que es quien las
+      # sirve.
+      - imagenes_servicios:/app/public/assets/servicios
+      - imagenes_logo:/app/public/assets/logo
+      # Las fotos de perfil. **Van en su propio volumen y no en el repositorio**:
+      # son la cara de alguien, o sea un dato personal, así que ni al ZIP ni a
+      # git — a diferencia del logo, que es del programa que se entrega.
+      - imagenes_personas:/app/public/assets/personas
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/caddy/Dockerfile
+    image: sgp-web
+    container_name: sgp_web
+    restart: unless-stopped
+    depends_on:
+      - app
+    # **Sin `ports:`, y eso es todo el punto de Traefik.** El 80 y el 443 del
+    # VPS los usa Traefik, que reparte por dominio: así conviven varios
+    # proyectos en el mismo servidor sin pelearse por los puertos web.
+    environment:
+      TZ: America/Asuncion
+    env_file:
+      - ./docker/php/secretos.env
+    volumes:
+      - caddy_log:/var/log/caddy
+      # Las mismas dos carpetas que escribe la aplicación, en sólo lectura:
+      # Caddy las sirve, no las toca.
+      - imagenes_servicios:/app/public/assets/servicios:ro
+      - imagenes_logo:/app/public/assets/logo:ro
+      - imagenes_personas:/app/public/assets/personas:ro
+    # **Sin red compartida, y eso es deliberado.** La documentación de Hostinger
+    # propone una red `traefik-proxy` externa, pero la plantilla del panel
+    # levanta Traefik en **`network_mode: host`** — comprobado en el servidor— y
+    # un contenedor en modo host **no puede estar en otra red de Docker a la
+    # vez**: Docker lo prohíbe.
+    #
+    # No hace falta: compartiendo la red del servidor, Traefik alcanza las IP
+    # `172.x` de los contenedores directamente, porque el host tiene ruta hacia
+    # los puentes de Docker. Descubre este contenedor por el socket, lee las
+    # etiquetas de abajo y le habla a su IP en el puerto 80.
+    #
+    # Y por eso tampoco va `traefik.docker.network`: esa etiqueta sirve para
+    # desempatar cuando el contenedor está en varias redes, y acá está en una.
+    labels:
+      - traefik.enable=true
+      # **El dominio va ESCRITO, no interpolado, y es a propósito.** Las
+      # etiquetas las resuelve COMPOSE, que lee el shell o un `.env` del
+      # directorio del proyecto — nunca el `env_file`. Un `${SGP_DOMINIO}` acá
+      # habría quedado en `Host(``)`: vacío, sin coincidir con nada, y Traefik
+      # no rutearía jamás sin dar un solo error. Es la misma trampa que dejó los
+      # correos sin nombre de remitente en la 7.87.1.
+      #
+      # La plantilla de Hostinger propone `${COMPOSE_PROJECT_NAME}.${TRAEFIK_HOST}`;
+      # eso funciona, pero ata la dirección publicada a cómo se llame el proyecto
+      # en el panel — renombrarlo cambiaría el dominio del salón.
+      #
+      # **Si cambia el subdominio hay que tocarlo en DOS lugares**: acá y en
+      # `APP_URL` de `docker/php/env.produccion`.
+      - traefik.http.routers.sgp.rule=Host(`sgp.columbiatcc.online`)
+      - traefik.http.routers.sgp.entrypoints=websecure
+      - traefik.http.routers.sgp.tls.certresolver=letsencrypt
+      # El puerto de Caddy adentro del contenedor. Traefik habla HTTP con él;
+      # el TLS ya lo terminó afuera.
+      - traefik.http.services.sgp.loadbalancer.server.port=80
+
+  # El planificador. En un VPS con panel esto sería una línea de cron; con
+  # contenedores es un servicio más, y así se apaga y se prende con el resto.
+  #
+  # Es la misma imagen que `app` y comparte su `storage`, pero en vez de servir
+  # HTTP corre `schedule:run` cada minuto, que es lo que Laravel espera. El
+  # scheduler ya declara `sgp:notificaciones` cada diez minutos con
+  # `withoutOverlapping()`, así que dos corridas no se pisan.
+  cron:
+    image: sgp-app
+    container_name: sgp_cron
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+      bd:
+        condition: service_healthy
+    environment:
+      TZ: America/Asuncion
+    env_file:
+      - ./docker/php/secretos.env
+    volumes:
+      - almacenamiento:/app/storage
+    # Se saltea el entrypoint: no tiene que cachear nada —de eso ya se ocupó
+    # `app`— ni levantar php-fpm.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "== SGP: planificador andando (schedule:run cada minuto) =="
+        while true; do
+          php /app/artisan schedule:run --no-interaction >> /app/storage/logs/cron.log 2>&1 || true
+          sleep 60
+        done
+
+  # El Automatizador SIFEN, que **levanta con el sistema y ya configurado**.
+  #
+  # Sube solo con el resto —está acá y lleva `restart: unless-stopped`— pero
+  # hasta la 7.106.0 subía **sin configuración**: su `bootstrap.php` busca un
+  # `.env` propio y, cuando no lo encuentra, **cae en su `.env.example`**. O sea
+  # que en el servidor corría con los valores de demostración sin decirlo.
+  #
+  # **Y crear ese `.env` a mano adentro del contenedor no sirve**: la imagen se
+  # reconstruye desde un clon nuevo en cada despliegue, así que lo que se
+  # escriba ahí dura hasta la próxima actualización. Es exactamente el problema
+  # que la 7.87.0 tuvo con `secretos.env`.
+  #
+  # Por eso la configuración viaja acá: **las variables del contenedor le ganan
+  # al archivo**, porque su cargador sólo escribe la clave `if getenv($k) ===
+  # false`. Lo que no está acá lo sigue tomando del ejemplo.
+  #
+  # **Sin `ports:`**: el SGP le habla por la red interna.
+  sifen:
+    build:
+      context: .
+      dockerfile: docker/sifen/Dockerfile
+    image: sgp-sifen
+    container_name: sgp_sifen
+    restart: unless-stopped
+    environment:
+      TZ: America/Asuncion
+
+      # **`mock` es lo que se puede hacer hoy, y decirlo es la mitad del
+      # asunto.** Genera el CDC, el KuDE y el XML —el circuito entero anda y la
+      # clienta recibe los documentos— pero **no declara ante la DNIT**. Para
+      # eso hace falta el certificado en `certs/`, que no está en el
+      # repositorio: se copia una vez al volumen `sifen_certs` y **sobrevive a
+      # los despliegues**. Con el certificado puesto, esto pasa a `prod`.
+      SIFEN_MODE: mock
+
+      # De acá salen las `xml_url` y `kude_url` que devuelve. El SGP no las usa
+      # —se baja las copias armando la dirección desde `SIFEN_URL`, que es la
+      # que de verdad está usando— pero vacío devolvía rutas relativas que no
+      # llevan a ningún lado.
+      APP_URL: http://sifen:8090
+
+      # **El tercer candado del remitente único.** El SGP ya le manda
+      # `X-SGP-Correo: no` en cada emisión (7.105.0) y el ejemplo lo trae
+      # vacío; esto lo deja vacío **desde el compose**, que es lo único que
+      # nadie va a llenar de buena fe. El comprobante lo manda el SGP, con la
+      # cuenta de «Seguridad → Correo del sistema».
+      MAIL_FROM_EMAIL: ""
+    volumes:
+      # El certificado y la clave privada, que NO están en el repositorio: un
+      # `.pem` versionado es un `.pem` publicado. En un volumen sobreviven al
+      # despliegue, que reconstruye la imagen entera.
+      - sifen_certs:/automatizador/certs
+      # Lo que genera: el XML firmado y el KuDE. El SGP se baja su copia y la
+      # guarda en `storage/app/sifen/<factura>/`, así que esto es el original —
+      # y en un volumen no se pierde al redesplegar.
+      - sifen_salida:/automatizador/salida
+
+volumes:
+  datos_bd:
+  almacenamiento:
+  imagenes_servicios:
+  imagenes_logo:
+  imagenes_personas:
+  caddy_log:
+  sifen_certs:
+  sifen_salida:

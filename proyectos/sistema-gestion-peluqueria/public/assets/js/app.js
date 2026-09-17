@@ -1,0 +1,3284 @@
+// =====================================================================
+//  SGP — comportamientos comunes de la interfaz
+//  1. Separador de miles automático en los campos numéricos
+//  2. Confirmación en botones marcados con data-confirmar
+//  3. Evita el doble envío accidental de un formulario
+//  4. Selector de disponibilidad de la agenda
+//  5. Señales de carga
+// =====================================================================
+
+// ---------------------------------------------------------------------
+//  Señales de carga
+//
+//  El sistema navega a la vieja usanza: cada clic pide una página nueva y
+//  el navegador no muestra NADA hasta que llega la respuesta. Con la base
+//  cargada, una lista con filtros o un informe tardan lo suyo, y esa
+//  espera en blanco se lee como «se colgó» cuando en realidad está
+//  trabajando. Acá se le pone cara a esa espera.
+//
+//  Se expone como `SGPCarga` para que las pantallas que traen su propio
+//  JavaScript (la agenda, el portal) lo usen en vez de inventar el suyo.
+//
+//  Nada de esto es funcional: si el JS no carga, todo sigue andando igual.
+// ---------------------------------------------------------------------
+window.SGPCarga = (function () {
+  'use strict';
+
+  var barra = null;
+  var pendientes = 0;
+  var reloj = null;
+
+  function elemento() {
+    if (!barra) {
+      barra = document.createElement('div');
+      barra.className = 'sgp-barra-carga';
+      barra.setAttribute('role', 'status');
+      barra.setAttribute('aria-live', 'polite');
+      barra.setAttribute('aria-label', 'Cargando');
+      document.body.appendChild(barra);
+    }
+    return barra;
+  }
+
+  // La barra no aparece de inmediato: si la respuesta llega en 200 ms, un
+  // parpadeo molesta más que la espera. Recién a partir de ahí hay algo
+  // que avisar.
+  function mostrar() {
+    pendientes++;
+    if (reloj) return;
+    reloj = setTimeout(function () {
+      reloj = null;
+      if (pendientes > 0) elemento().classList.add('visible');
+    }, 250);
+  }
+
+  function ocultar() {
+    pendientes = Math.max(0, pendientes - 1);
+    if (pendientes > 0) return;
+    if (reloj) { clearTimeout(reloj); reloj = null; }
+    if (barra) barra.classList.remove('visible');
+  }
+
+  function todoListo() {
+    pendientes = 0;
+    if (reloj) { clearTimeout(reloj); reloj = null; }
+    if (barra) barra.classList.remove('visible');
+  }
+
+  // Marca un botón como «esperando»: el ícono se convierte en spinner.
+  function ocupar(boton) {
+    if (!boton || boton.classList.contains('cargando')) return;
+    if (!boton.querySelector('i')) boton.classList.add('sin-icono');
+    boton.classList.add('cargando');
+  }
+
+  function liberar(boton) {
+    if (boton) boton.classList.remove('cargando', 'sin-icono');
+  }
+
+  // Envuelve un fetch: prende la barra, atenúa el bloque que se va a
+  // rehacer y lo devuelve a la normalidad pase lo que pase.
+  function envolver(promesa, bloque) {
+    mostrar();
+    if (bloque) bloque.classList.add('sgp-actualizando');
+
+    return promesa.finally(function () {
+      ocultar();
+      if (bloque) bloque.classList.remove('sgp-actualizando');
+    });
+  }
+
+  // Volver con el botón «atrás» restaura la página desde la caché del
+  // navegador, con la barra tal como quedó: hay que apagarla a mano.
+  window.addEventListener('pageshow', todoListo);
+  window.addEventListener('pagehide', todoListo);
+
+  return {
+    mostrar: mostrar, ocultar: ocultar, todoListo: todoListo,
+    ocupar: ocupar, liberar: liberar, envolver: envolver,
+  };
+})();
+
+/* Cuántas veces va un servicio: una por persona marcada en su «¿para
+   quién?». Sin la lista —cita de una sola persona— es una. Lo usan el
+   resumen, el repaso y la consulta de horarios, así que vive en `window`. */
+window.sgpVecesDe = function (casilla) {
+  var n = casilla && casilla.value
+    ? document.querySelectorAll('input[name="para[' + casilla.value + '][]"]:checked').length : 0;
+  return n > 1 ? n : 1;
+};
+
+// ---------------------------------------------------------------------
+//  Cuándo se muestra la barra
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+
+  // Un enlace que NO va a cambiar de página no tiene que encender nada:
+  // descargas, anclas, pestañas nuevas, `mailto:`, y el clic con Ctrl o
+  // rueda del mouse, que abre en otra pestaña y deja ésta quieta.
+  function navegaDeVerdad(a, ev) {
+    if (!a || !a.href) return false;
+    if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || ev.button !== 0)) return false;
+    if (a.target && a.target !== '_self') return false;
+    if (a.hasAttribute('download')) return false;
+    if (a.getAttribute('href').indexOf('#') === 0) return false;
+    if (!/^https?:/i.test(a.href)) return false;              // mailto:, tel:, javascript:
+    if (a.origin !== window.location.origin) return false;
+    // Las exportaciones y el .ics de la cita bajan un archivo y la página se
+    // queda donde está: la barra se quedaría prendida para siempre. El `.ics`
+    // va acá además del atributo `download` del enlace, para que valga aunque
+    // alguien arme el enlace sin el atributo.
+    if (/[?&]export=csv\b/.test(a.href)) return false;
+    if (/\/mi-cita\/calendario\b/.test(a.href)) return false;
+    // El comprobante que la clienta se baja del portal: mismo caso.
+    if (/\/portal\/factura\/descargar\b/.test(a.href)) return false;
+
+    return true;
+  }
+
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest ? ev.target.closest('a') : null;
+    if (!navegaDeVerdad(a, ev)) return;
+    // Si algo canceló el clic (una confirmación que se respondió que no),
+    // no hay navegación que anunciar.
+    setTimeout(function () { if (!ev.defaultPrevented) window.SGPCarga.mostrar(); }, 0);
+  });
+
+  // Al enviar un formulario. Va en la fase de captura y ANTES que el
+  // bloqueo de doble envío, pero se difiere para leer `defaultPrevented`:
+  // si la validación de miles o un `data-confirmar` cortaron el envío, no
+  // hay nada esperando.
+  document.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!(form instanceof HTMLFormElement)) return;
+
+    setTimeout(function () {
+      if (ev.defaultPrevented) return;
+      window.SGPCarga.mostrar();
+      if (ev.submitter) window.SGPCarga.ocupar(ev.submitter);
+    }, 0);
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  Campo de celular
+//  Deja escribir solo dígitos y avisa en el momento si el número lleva el
+//  0 inicial que no corresponde al usar el código de país (0984… → 984…).
+//  La validación de verdad la hace el servidor con telefono_normalizar().
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+  document.querySelectorAll('.sgp-tel').forEach(function (grupo) {
+    var sel = grupo.querySelector('.sgp-tel-pais');
+    var num = grupo.querySelector('.sgp-tel-num');
+    if (!sel || !num) return;
+    var pista = grupo.parentNode.querySelector('.sgp-tel-pista');
+
+    function opcion() { return sel.options[sel.selectedIndex]; }
+
+    function refrescarPista() {
+      if (!pista) return;
+      var o = opcion(), tr = o.getAttribute('data-troncal');
+      pista.textContent = 'Para ' + o.textContent.split('·')[1].trim() + ' son '
+        + o.getAttribute('data-min') + ' a ' + o.getAttribute('data-max') + ' dígitos'
+        + (tr ? ', sin el ' + tr + ' inicial.' : '.');
+    }
+
+    function limpiar() {
+      var o = opcion(), tr = o.getAttribute('data-troncal');
+      var v = num.value.replace(/\D+/g, '');
+      // El 0 (o troncal del país) no va cuando se usa el código internacional
+      if (tr && v.indexOf(tr) === 0 && v.length > tr.length) {
+        v = v.slice(tr.length);
+        num.classList.add('sgp-tel-ajustado');
+        setTimeout(function () { num.classList.remove('sgp-tel-ajustado'); }, 900);
+      }
+      var max = parseInt(o.getAttribute('data-max'), 10) || 15;
+      if (v.length > max) v = v.slice(0, max);
+      if (num.value !== v) num.value = v;
+    }
+
+    num.addEventListener('input', limpiar);
+    num.addEventListener('blur', limpiar);
+    sel.addEventListener('change', function () { refrescarPista(); limpiar(); });
+    refrescarPista();
+  });
+})();
+
+
+// ---------------------------------------------------------------------
+//  Selector de disponibilidad
+//
+//  Reemplaza al campo de fecha y hora libre. Le pregunta al servidor qué días
+//  y qué horas quedan libres de verdad para los servicios elegidos, y solo
+//  ofrece esos: ya no se puede pedir un horario en el que no hay nadie. El
+//  servidor lo vuelve a comprobar al guardar, dentro del candado del
+//  procedimiento, así que esto es comodidad, no la autoridad.
+//
+//  Lo usan las dos pantallas que reservan —Nueva cita y el portal de la
+//  clienta—, que hacían lo mismo con dos copias distintas del mismo código.
+//  El contenedor declara todo lo que cambia entre una y otra:
+//
+//    <div data-agenda="{{ route('citas.disponibilidad') }}"
+//         data-agenda-sujeto="La cita"
+//         data-agenda-boton="#btnAgendar">
+//      <div data-agenda-aviso></div>
+//      <div data-agenda-dias></div>
+//      <div data-agenda-horas></div>
+//    </div>
+//
+//  El profesional se resuelve solo, y no es igual en las dos pantallas:
+//  si hay selectores por servicio (`prof_servicio[ID]`, que es como pide la
+//  clienta) se consulta a esa persona únicamente cuando TODOS los servicios
+//  elegidos la piden a ella; si piden a varias, o alguno quedó en «quien me
+//  atienda», se juntan los huecos de todo el equipo y el servidor asigna al
+//  reservar. Si no hay esos selectores, manda el combo `id_usuario`.
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+  // **Puede haber VARIOS en la misma pantalla.** Antes se tomaba el primero y
+  // listo, que alcanzaba para reservar —hay uno solo—; el portal de la clienta
+  // dibuja además un modal por cita para cambiar el dia, y ahi son tantos como
+  // citas tenga. Con `querySelector` los demas quedaban sin selector y su campo
+  // de fecha era una caja vacia donde habia que adivinar el horario.
+  // El portal puede dibujar varios modales de reprogramación en la misma
+  // página. Las etiquetas apuntan a los combos por id, así que el contador
+  // debe ser compartido entre instancias para no repetir ids.
+  var agendaSelectId = 0;
+
+  document.querySelectorAll('[data-agenda]').forEach(iniciarAgenda);
+
+  function iniciarAgenda(cont) {
+  var url     = cont.getAttribute('data-agenda');
+  var sujeto  = cont.getAttribute('data-agenda-sujeto') || 'La cita';
+  var selBtn  = cont.getAttribute('data-agenda-boton');
+  var aviso   = cont.querySelector('[data-agenda-aviso]');
+  var diasEl  = cont.querySelector('[data-agenda-dias]');
+  var horasEl = cont.querySelector('[data-agenda-horas]');
+  // **El campo se busca dentro del formulario del contenedor**, no en toda la
+  // pagina: con varios modales abiertos en el DOM, `document.querySelector`
+  // devolvia siempre el del primero y todos escribian ahi.
+  var ambito = cont.closest('form') || document;
+  var campo   = ambito.querySelector('[name="fecha_hora"]');
+  var btn     = selBtn ? ambito.querySelector(selBtn) || document.querySelector(selBtn) : null;
+
+  // Lo que este selector tiene FIJO. Reservar los toma de la pantalla —la
+  // clienta va marcando servicios—; reprogramar no pregunta nada de eso: la
+  // cita ya tiene sus servicios y su profesional, y lo unico que se elige es
+  // cuando. Declarados acá, no hace falta que existan las casillas.
+  var fijos = {
+    servicios: (cont.getAttribute('data-agenda-servicios') || '').split(',').filter(Boolean),
+    profesional: cont.getAttribute('data-agenda-profesional') || '',
+    sucursal: cont.getAttribute('data-agenda-sucursal') || '',
+    // **Cuantas personas van tambien es fijo al reprogramar**, y sin esto el
+    // modal no ofrecia una sola fecha. La cita ya sabe para cuantas es
+    // (`cita.personas`), pero el modal no tiene la casilla —no se vuelve a
+    // preguntar lo que ya esta decidido— asi que el servidor recibia 1 y
+    // media el peor caso: los cuatro servicios de una reserva para dos daban
+    // 6 h 15 min en serie contra un turno de 6 h, y contestaba «no entra en el
+    // turno» a una cita que el salon estaba por atender ese mismo dia.
+    personas: cont.getAttribute('data-agenda-personas') || ''
+  };
+  var diaElegido = null;
+  // Lo que ya venia elegido, para devolverlo marcado tras un rechazo. Se
+  // guarda antes de que nada lo pise.
+  var previo = campo && campo.value ? String(campo.value) : '';
+
+  // Si app.js se cargó a medias, reservar tiene que seguir andando igual: la
+  // señal de carga es un adorno, no parte del funcionamiento.
+  var SGPCarga = window.SGPCarga || { envolver: function (p) { return p; } };
+
+  function elegidos() {
+    if (fijos.servicios.length) { return fijos.servicios; }
+
+    return Array.prototype.slice.call(document.querySelectorAll('.srv:checked'))
+      .map(function (c) { return c.value; });
+  }
+
+  function profesional() {
+    if (fijos.profesional) { return fijos.profesional; }
+
+    // Un combo de profesional para toda la cita, si la pantalla lo tiene:
+    // ese manda y es el que le bloquea el bloque más largo en la agenda.
+    // **Nueva cita ya no lo tiene** desde la 7.67.0 —preguntaba lo mismo que
+    // el de cada servicio— así que cae en la rama de abajo, la del portal.
+    var combo = document.querySelector('[name="id_usuario"]');
+    if (combo) return combo.value || 0;
+
+    // El portal no tiene ese combo a propósito: cada servicio trae su
+    // selector, con «quien me atienda» por defecto.
+    var pedidos = elegidos().map(function (id) {
+      var sel = document.querySelector('[name="prof_servicio[' + id + ']"]');
+      return sel ? sel.value : '0';
+    });
+    var distintos = pedidos.filter(function (v, i, a) { return a.indexOf(v) === i; });
+
+    return (distintos.length === 1 && distintos[0] !== '0') ? distintos[0] : 0;
+  }
+
+  function params(extra) {
+    var p = new URLSearchParams();
+    elegidos().forEach(function (s) { p.append('servicios[]', s); });
+    p.append('id_usuario', profesional());
+
+    // **Con quién quiere atenderse CADA servicio, y no sólo cuando coinciden.**
+    //
+    // `profesional()` devuelve una sola persona, así que sólo puede hablar
+    // cuando TODOS los servicios van a la misma: con dos servicios en dos manos
+    // distintas —o con uno pedido y otro en «quien me atienda»— devuelve 0, que
+    // para el servidor significa «cualquiera». Con eso el calendario contestaba
+    // con los huecos del equipo entero y ofrecía horarios **fuera del turno de
+    // las personas que se acababan de elegir**; el «no» llegaba al guardar, con
+    // todo ya decidido. Se reportó así: «el horario no coincide con el turno de
+    // los profesionales seleccionados».
+    //
+    // Mandando el pedido servicio por servicio, `Agenda::acotarPedidos()` deja
+    // en cada uno a quien se pidió y la intersección de turnos sale sola de la
+    // maquinaria que ya estaba.
+    if (!fijos.profesional) {
+      elegidos().forEach(function (id) {
+        var sel = ambito.querySelector('[name="prof_servicio[' + id + ']"]');
+        var v = sel ? parseInt(sel.value, 10) : 0;
+        if (v > 0) { p.append('prof[' + id + ']', v); }
+      });
+    }
+    // La sucursal elegida viaja con la consulta: el turno es del local, asi
+    // que sin ella el servidor contestaria con los horarios de otra sede.
+    var suc = document.querySelector('[name="id_sucursal"]');
+    if (fijos.sucursal) { p.append('sucursal', fijos.sucursal); }
+    else if (suc && suc.value) { p.append('sucursal', suc.value); }
+
+    // El turno elegido —a mano o deducido del profesional pedido— acota los
+    // dias y las horas a esa franja. Sin el, se ofrece todo.
+    var turno = document.querySelector('[name="id_turno"]');
+    if (turno && turno.value && turno.value !== '0') { p.append('turno', turno.value); }
+
+    // **Cuantas personas van cambia cuanto dura la cita.** Dos servicios
+    // sobre la cabeza van en serie sobre UNA clienta; sobre dos, con dos
+    // peluqueras, van a la vez. Sin mandarlo, el servidor mide el peor caso y
+    // contesta que no entra en el turno.
+    // Reservar la toma de la casilla; reprogramar la trae fija del atributo,
+    // porque ahi la casilla no existe. El fijo manda: si el modal la declara,
+    // es el dato de la cita y no hay nada que leer de la pantalla.
+    var per = ambito.querySelector('[name="personas"]');
+    if (fijos.personas) { p.append('personas', fijos.personas); }
+    else if (per && per.value) { p.append('personas', per.value); }
+
+    // **Y cuantas veces va cada servicio.** Un servicio marcado para dos
+    // personas son dos —dos cortes, en serie si los hace la misma— y eso
+    // cambia cuanto dura la cita (7.119.0). Solo se manda cuando es mas de
+    // una: el resto es lo de siempre.
+    if (!fijos.servicios.length) {
+      elegidos().forEach(function (id) {
+        var n = document.querySelectorAll('input[name="para[' + id + '][]"]:checked').length;
+        if (n > 1) { p.append('veces[' + id + ']', n); }
+      });
+    }
+
+    // La clienta, para no ofrecerle un dia en el que ya tiene ese servicio.
+    // En el portal la sabe el servidor por la sesion; en Nueva cita se elige en
+    // la misma pantalla, asi que viaja en la consulta.
+    var cli = document.querySelector('[name="id_cliente"]');
+    if (cli && cli.value) { p.append('id_cliente', cli.value); }
+    for (var k in (extra || {})) { p.append(k, extra[k]); }
+
+    return p;
+  }
+
+  function pedir(extra, destino) {
+    // El endpoint puede venir con su propia consulta —el del enlace del
+    // correo lleva el token en `?t=`—: ahí lo nuestro va con `&`.
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    return SGPCarga
+      .envolver(fetch(url + sep + params(extra).toString(),
+        { headers: { 'Accept': 'application/json' } }), destino)
+      .then(function (r) { return r.json(); });
+  }
+
+  function cargando(el, texto) {
+    el.innerHTML = '<span class="sgp-cargando-texto">'
+      + '<span class="sgp-spinner"></span> ' + texto + '</span>';
+  }
+
+  function limpiar() {
+    diasEl.innerHTML = '';
+    horasEl.innerHTML = '';
+    if (campo) campo.value = '';
+    if (btn) btn.disabled = true;
+  }
+
+  // **Cada consulta lleva su número de orden.** Marcar dos servicios seguidos
+  // dispara dos búsquedas, y las respuestas no vuelven necesariamente en el
+  // mismo orden: la vieja llegaba después del `limpiar()` de la nueva y
+  // dibujaba SUS combos, así que el mes y el día quedaban con las fechas de la
+  // consulta anterior — peor que el renglón repetido, porque no se nota.
+  var consulta = 0;
+  var eleccion = 0;
+
+  function cargarDias() {
+    var mia = ++consulta;
+    limpiar();
+    if (!elegidos().length) {
+      aviso.textContent = 'Elegí primero los servicios para ver los horarios disponibles.';
+      return;
+    }
+    // El cálculo mira turnos, citas y ausencias de 60 días: con la agenda
+    // cargada tarda, y sin señal parece que el sistema se quedó.
+    cargando(aviso, 'Buscando días con lugar…');
+
+    pedir(null, diasEl).then(function (d) {
+      if (mia !== consulta) { return; }   // llegó tarde: ya hay otra en curso
+      // Se limpia otra vez ANTES de dibujar: `pedir()` deja su spinner adentro
+      // del bloque, y el rótulo se agregaba encima en vez de reemplazarlo.
+      diasEl.innerHTML = '';
+      if (!d.ok) {
+        aviso.textContent = d.motivo || 'No se pudo consultar la agenda.';
+        return;
+      }
+      if (!d.dias || !d.dias.length) {
+        // El servidor sabe distinguir «está todo tomado» de «no entra en
+        // ningún turno», que se arreglan de formas distintas.
+        aviso.textContent = d.motivo
+          || ('No quedan días con lugar en los próximos dos meses. '
+              + 'Probá con otro profesional o con menos servicios.');
+        return;
+      }
+      // **En «quien me atienda» cada hora dura lo suyo**, según quién esté
+      // libre a esa hora: se dice al elegirla, y acá sólo el piso.
+      aviso.textContent = d.duracion_fija === false
+        ? sujeto + ' dura desde ' + d.duracion + ' minutos, según quién la atienda: al elegir la hora te decimos cuánto y con quién.'
+        : sujeto + ' dura ' + d.duracion + ' minutos.';
+      dibujarDias(d.dias);
+    }).catch(function () { aviso.textContent = 'No se pudo consultar la agenda.'; });
+  }
+
+  // -------------------------------------------------------------------
+  //  Los días y las horas se eligen con COMBOS, no con fichas.
+  //
+  //  Con dos meses de agenda las fichas eran cincuenta botones en pantalla:
+  //  hay que recorrerlos con la vista para encontrar un día, y en el celular
+  //  ocupan varias pantallas de scroll. Dos combos —el mes y el día— dicen lo
+  //  mismo en dos renglones, y el navegador ya sabe abrirlos en cualquier
+  //  dispositivo.
+  //
+  //  **Lo que se ofrece no cambia**: son exactamente los mismos días y las
+  //  mismas horas que devuelve el servidor, con los mismos filtros de turno,
+  //  profesional y servicios. Cambia como se muestran.
+  // -------------------------------------------------------------------
+  var MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+               'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  var DIAS_SEM = ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab'];
+  // **Se llama `campoCombo` y no `combo` a proposito.** Mas abajo hay un
+  // `var combo = document.querySelector('[name="id_usuario"]')`, y un `var`
+  // del mismo nombre PISA la funcion declarada arriba: cuando la respuesta
+  // del servidor volvia, `combo` ya era un elemento del DOM y la pantalla
+  // contestaba «No se pudo consultar la agenda» sin decir nada mas.
+  function campoCombo(id, etiqueta) {
+    var caja = document.createElement('div');
+    caja.className = 'sgp-agenda-campo';
+    var lab = document.createElement('label');
+    lab.className = 'form-label';
+    lab.setAttribute('for', id);
+    lab.textContent = etiqueta;
+    var sel = document.createElement('select');
+    sel.className = 'form-select form-select-sm';
+    sel.id = id;
+    caja.appendChild(lab);
+    caja.appendChild(sel);
+
+    return { caja: caja, sel: sel };
+  }
+
+  function opcion(sel, valor, texto) {
+    var o = document.createElement('option');
+    o.value = valor;
+    o.textContent = texto;
+    sel.appendChild(o);
+  }
+
+  // `2026-09-04` sin pasar por `new Date(cadena)`, que en algunos navegadores
+  // la lee como UTC y corre el día uno para atrás.
+  function fechaLocal(f) {
+    var p = f.split('-');
+
+    return new Date(+p[0], +p[1] - 1, +p[2]);
+  }
+
+  function limpiarHoras() {
+    horasEl.innerHTML = '';
+    if (campo) campo.value = '';
+    if (btn) btn.disabled = true;
+  }
+
+  function dibujarDias(dias) {
+    diasEl.innerHTML = '';
+    agendaSelectId++;
+
+    var fila = document.createElement('div');
+    fila.className = 'sgp-agenda-fila';
+    var mes = campoCombo('agMes' + agendaSelectId, '1. Mes');
+    var dia = campoCombo('agDia' + agendaSelectId, '2. Día');
+    fila.appendChild(mes.caja);
+    fila.appendChild(dia.caja);
+    diasEl.appendChild(fila);
+
+    // Sólo los meses que de verdad tienen algún día libre.
+    var meses = [];
+    dias.forEach(function (f) {
+      var m = f.slice(0, 7);
+      if (meses.indexOf(m) === -1) { meses.push(m); }
+    });
+    meses.forEach(function (m) {
+      var p = m.split('-');
+      opcion(mes.sel, m, MESES[+p[1] - 1] + ' de ' + p[0]);
+    });
+
+    function llenarDias() {
+      dia.sel.innerHTML = '';
+      opcion(dia.sel, '', 'Elegí el día…');
+      dias.filter(function (f) { return f.slice(0, 7) === mes.sel.value; })
+        .forEach(function (f) {
+          opcion(dia.sel, f, DIAS_SEM[fechaLocal(f).getDay()] + ' ' + f.slice(8, 10));
+        });
+    }
+
+    mes.sel.addEventListener('change', function () {
+      llenarDias();
+      // Invalida una consulta de horas que todavía esté llegando.
+      eleccion++;
+      limpiarHoras();
+    });
+    dia.sel.addEventListener('change', function () {
+      if (dia.sel.value) { elegirDia(dia.sel.value); }
+      else {
+        eleccion++;
+        limpiarHoras();
+      }
+    });
+
+    // Lo que ya venía elegido vuelve elegido: tras un rechazo el formulario
+    // conserva todo menos esto, y desde afuera se lee como que el sistema
+    // borró lo cargado.
+    var quiero = previo ? previo.slice(0, 10) : '';
+    if (quiero && dias.indexOf(quiero) !== -1) { mes.sel.value = quiero.slice(0, 7); }
+    llenarDias();
+    if (quiero && dias.indexOf(quiero) !== -1) {
+      dia.sel.value = quiero;
+      elegirDia(quiero);
+    }
+  }
+
+  function elegirDia(f) {
+    diaElegido = f;
+    var miEleccion = ++eleccion;
+    cargando(horasEl, 'Buscando horarios…');
+    if (campo) campo.value = '';
+    if (btn) btn.disabled = true;
+
+    var mia = consulta;
+    pedir({ fecha: f }, horasEl).then(function (d) {
+      if (mia !== consulta || miEleccion !== eleccion) { return; }
+      horasEl.innerHTML = '';
+      delete cont.dataset.sgpEleccion;
+      if (!d.ok || !d.horas || !d.horas.length) {
+        // **Se dice POR QUÉ, con nombres.** «Ese día ya no tiene horarios
+        // libres» no decía cuál de las decisiones es la que no cierra: el
+        // servidor manda quién no coincide, cuándo puede aparte y qué hacer.
+        var porque = document.createElement('div');
+        porque.className = 'alert alert-warning py-2 mb-0';
+        porque.style.fontSize = '.86rem';
+        porque.textContent = d.motivo || 'Ese día ya no tiene horarios libres.';
+        horasEl.appendChild(porque);
+        return;
+      }
+
+      var fila = document.createElement('div');
+      fila.className = 'sgp-agenda-fila';
+      var hora = campoCombo('agHora' + agendaSelectId, '3. Hora');
+      fila.appendChild(hora.caja);
+      horasEl.appendChild(fila);
+
+      // La duración va al lado de la hora sólo si cambia entre horas: con
+      // gente pedida es siempre la misma y repetirla cuarenta veces es ruido.
+      var varia = d.horas.some(function (h) { return h.duracion !== d.horas[0].duracion; });
+      opcion(hora.sel, '', 'Elegí la hora…');
+      d.horas.forEach(function (h) {
+        opcion(hora.sel, h.hora, h.hora + (varia && h.duracion ? ' · ' + h.duracion + ' min' : ''));
+      });
+
+      hora.sel.addEventListener('change', function () {
+        if (!hora.sel.value) {
+          if (campo) campo.value = '';
+          if (btn) btn.disabled = true;
+          delete cont.dataset.sgpEleccion;
+
+          return;
+        }
+        if (campo) campo.value = diaElegido + ' ' + hora.sel.value + ':00';
+        if (btn) btn.disabled = false;
+
+        // **Lo que se eligió, dicho entero**: cuánto dura a esa hora y quién
+        // atiende cada cosa. Es lo que el repaso muestra después, así el
+        // «con quien esté disponible» pasa a tener nombre antes de confirmar.
+        var h = d.horas.filter(function (x) { return x.hora === hora.sel.value; })[0];
+        if (h) {
+          cont.dataset.sgpEleccion = JSON.stringify({ duracion: h.duracion, quienes: h.quienes || '', nombres: h.nombres || {} });
+          aviso.textContent = 'A las ' + h.hora + ' ' + sujeto.toLowerCase() + ' dura ' + h.duracion + ' minutos'
+            + (h.quienes ? ' · ' + h.quienes : '') + '.';
+        }
+      });
+
+      if (previo && previo.slice(0, 10) === diaElegido) {
+        var h = previo.slice(11, 16);
+        if (Array.prototype.some.call(hora.sel.options, function (o) { return o.value === h; })) {
+          hora.sel.value = h;
+          if (campo) campo.value = diaElegido + ' ' + h + ':00';
+          if (btn) btn.disabled = false;
+        }
+        previo = '';
+      }
+    }).catch(function () { horasEl.textContent = 'No se pudo consultar la agenda.'; });
+  }
+
+  // Cambiar de servicio o de profesional cambia los huecos posibles, así que
+  // en los dos casos se vuelve a pedir la agenda. Los selectores por servicio
+  // solo se escuchan cuando NO hay combo: con combo no cambian la consulta, y
+  // escucharlos sería un viaje al servidor para el mismo resultado.
+  // Con todo fijo no hay nada que escuchar: los servicios y el profesional no
+  // se eligen en esta pantalla, así que la agenda se pide una sola vez.
+  if (!fijos.servicios.length) {
+    document.querySelectorAll('.srv').forEach(function (c) {
+      c.addEventListener('change', cargarDias);
+    });
+    var combo = document.querySelector('[name="id_usuario"]');
+    if (combo) {
+      combo.addEventListener('change', cargarDias);
+    } else {
+      document.querySelectorAll('[name^="prof_servicio["]').forEach(function (s) {
+        s.addEventListener('change', cargarDias);
+      });
+    }
+
+    // **Cambiar de clienta cambia qué días se pueden ofrecer**, porque los que
+    // ya tiene ese servicio no se muestran. Sin esto, la lista quedaría con los
+    // días de la clienta anterior.
+    var cli = document.querySelector('[name="id_cliente"]');
+    if (cli) { cli.addEventListener('change', cargarDias); }
+
+    // **Y cambiar cuantas personas van cambia los horarios**, porque cambia lo
+    // que puede hacerse en paralelo. Sin esto, la clienta ponia «2 personas»
+    // despues de elegir el horario y la lista seguia siendo la de una.
+    var personas = ambito.querySelector('[name="personas"]');
+    if (personas) { personas.addEventListener('change', cargarDias); }
+
+    // **Y para quienes es cada servicio**: marcar a la segunda amiga en
+    // «Corte» es un corte mas, o sea otra duracion y otros horarios.
+    document.addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t && t.hasAttribute && t.hasAttribute('data-para-check')) { cargarDias(); }
+    });
+  }
+
+  cargarDias();
+  }
+})();
+
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------
+  //  Separador de miles
+  //  <input class="input-miles">                → entero (7.000)
+  //  <input class="input-miles" data-decimales="2"> → admite 0,5
+  //  El servidor recibe "7.000" y lo interpreta con num() de helpers.php,
+  //  así que el formato se mantiene aunque el navegador no ejecute el JS.
+  // ---------------------------------------------------------------
+  function agrupar(entero) {
+    entero = entero.replace(/^0+(?=\d)/, '');       // sin ceros a la izquierda
+    return entero.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  }
+
+  function formatear(valor, decimales) {
+    var negativo = /^-/.test(valor);
+    var limpio = valor.replace(/[^\d,]/g, '');
+    var partes = limpio.split(',');
+    var entero = agrupar(partes[0] || '');
+    var salida = entero;
+    if (decimales > 0 && partes.length > 1) {
+      salida += ',' + partes.slice(1).join('').slice(0, decimales);
+    }
+    if (salida === '' ) return '';
+    return (negativo ? '-' : '') + salida;
+  }
+
+  // Cuenta cuántos dígitos hay antes de la posición del cursor, para poder
+  // devolverlo al mismo lugar después de reformatear.
+  function digitosAntes(texto, pos) {
+    var n = 0;
+    for (var i = 0; i < pos && i < texto.length; i++) {
+      if (/[\d,]/.test(texto[i])) n++;
+    }
+    return n;
+  }
+
+  function posicionDeDigito(texto, n) {
+    if (n <= 0) return 0;
+    var vistos = 0;
+    for (var i = 0; i < texto.length; i++) {
+      if (/[\d,]/.test(texto[i])) {
+        vistos++;
+        if (vistos === n) return i + 1;
+      }
+    }
+    return texto.length;
+  }
+
+  function aplicar(el) {
+    var decimales = parseInt(el.getAttribute('data-decimales') || '0', 10);
+    var antes = el.value;
+    var cursor = el.selectionStart;
+    var nDig = digitosAntes(antes, cursor === null ? antes.length : cursor);
+    var despues = formatear(antes, decimales);
+    if (despues === antes) return;
+    el.value = despues;
+    if (cursor !== null && el.type === 'text') {
+      var nuevo = posicionDeDigito(despues, nDig);
+      try { el.setSelectionRange(nuevo, nuevo); } catch (e) { /* input sin selección */ }
+    }
+  }
+
+  function prepararCampos(raiz) {
+    (raiz || document).querySelectorAll('.input-miles').forEach(function (el) {
+      if (el.dataset.milesListo === '1') return;
+      el.dataset.milesListo = '1';
+      // type=number no admite el punto de miles: se pasa a texto numérico
+      if (el.type === 'number') el.type = 'text';
+      el.setAttribute('inputmode', parseInt(el.getAttribute('data-decimales') || '0', 10) > 0 ? 'decimal' : 'numeric');
+      el.autocomplete = 'off';
+      if (el.value !== '') aplicar(el);
+      el.addEventListener('input', function () { aplicar(el); });
+      el.addEventListener('blur', function () { aplicar(el); });
+    });
+  }
+
+  // Convierte "7.000" a 7000 para poder comparar contra data-min / data-max
+  function valorNumerico(el) {
+    var s = (el.value || '').replace(/\./g, '').replace(',', '.');
+    return s === '' ? null : parseFloat(s);
+  }
+
+  // ---------------------------------------------------------------
+  //  Validación de mínimos y máximos de los campos con miles
+  // ---------------------------------------------------------------
+  function validarMiles(form) {
+    var malo = null;
+    form.querySelectorAll('.input-miles').forEach(function (el) {
+      if (malo) return;
+      var v = valorNumerico(el);
+      var min = el.getAttribute('data-min');
+      var max = el.getAttribute('data-max');
+      if (el.hasAttribute('required') && (v === null || isNaN(v))) {
+        malo = { el: el, msg: 'Completá este campo.' };
+      } else if (v !== null && !isNaN(v)) {
+        if (min !== null && v < parseFloat(min)) malo = { el: el, msg: 'El valor mínimo es ' + min + '.' };
+        if (max !== null && v > parseFloat(max)) malo = { el: el, msg: 'El valor máximo es ' + max + '.' };
+      }
+    });
+    if (malo) {
+      malo.el.setCustomValidity(malo.msg);
+      malo.el.reportValidity();
+      setTimeout(function () { malo.el.setCustomValidity(''); }, 50);
+      return false;
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------
+  //  Buscador sobre un <select> largo (clientes, productos, servicios)
+  //  <input data-filtra="#selCliente">  filtra las opciones de ese select
+  //  <input data-filtra=".chk-servicio"> filtra bloques marcados con esa clase
+  // ---------------------------------------------------------------
+  function prepararFiltros(raiz) {
+    (raiz || document).querySelectorAll('[data-filtra]').forEach(function (caja) {
+      if (caja.dataset.filtroListo === '1') return;
+      caja.dataset.filtroListo = '1';
+      var destino = caja.getAttribute('data-filtra');
+      var contador = caja.getAttribute('data-contador');
+
+      var sel = document.querySelector(destino);
+      var esSelect = sel && sel.tagName === 'SELECT';
+      var originales = esSelect ? Array.prototype.slice.call(sel.options).map(function (o) {
+        return { v: o.value, t: o.text, buscar: o.text.toLowerCase() + ' ' + (o.getAttribute('data-buscar') || '').toLowerCase() };
+      }) : null;
+
+      function filtrar() {
+        var q = caja.value.trim().toLowerCase();
+        var visibles = 0;
+        if (esSelect) {
+          var elegido = sel.value;
+          sel.innerHTML = '';
+          originales.forEach(function (o) {
+            if (q && o.v !== '' && o.buscar.indexOf(q) === -1) return;
+            var op = document.createElement('option');
+            op.value = o.v; op.text = o.t;
+            if (o.v === elegido) op.selected = true;
+            sel.appendChild(op);
+            if (o.v !== '') visibles++;
+          });
+        } else {
+          document.querySelectorAll(destino).forEach(function (el) {
+            var txt = (el.textContent || '').toLowerCase();
+            var ok = !q || txt.indexOf(q) !== -1;
+            el.style.display = ok ? '' : 'none';
+            if (ok) visibles++;
+          });
+        }
+        if (contador) {
+          var c = document.querySelector(contador);
+          if (c) c.textContent = visibles + (visibles === 1 ? ' resultado' : ' resultados');
+        }
+      }
+      caja.addEventListener('input', filtrar);
+      // Enter dentro del buscador no debe enviar el formulario
+      caja.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') ev.preventDefault(); });
+    });
+  }
+
+  // ---------------------------------------------------------------
+  //  Confirmación y bloqueo de doble envío
+  // ---------------------------------------------------------------
+
+  //  **El cartel de confirmación es del sistema, no del navegador.**
+  //
+  //  `window.confirm()` dibuja un cuadro que dice «localhost:8000 dice», con
+  //  los botones del sistema operativo y sin una palabra de la identidad del
+  //  salón. Para una acción que anula un comprobante o borra un registro, ese
+  //  cartel se lee como un error del navegador y no como una pregunta del
+  //  sistema — que es justo lo contrario de lo que tiene que transmitir.
+  //
+  //  Se dibuja con Bootstrap, que ya está cargado, y **cae de vuelta en
+  //  `window.confirm()` si no lo estuviera**: una confirmación que no se puede
+  //  mostrar no puede convertirse en «seguí adelante sin preguntar».
+  function confirmar(texto, alAceptar) {
+    if (!window.bootstrap || !window.bootstrap.Modal) {
+      if (window.confirm(texto)) { alAceptar(); }
+      return;
+    }
+
+    var caja = document.getElementById('sgpConfirmar');
+    if (!caja) {
+      caja = document.createElement('div');
+      caja.id = 'sgpConfirmar';
+      caja.className = 'modal fade';
+      caja.tabIndex = -1;
+      caja.setAttribute('aria-hidden', 'true');
+      caja.innerHTML =
+        '<div class="modal-dialog modal-dialog-centered modal-sm">'
+        + '<div class="modal-content">'
+        + '<div class="modal-header"><h5 class="modal-title" style="font-size:1rem">'
+        + '<i class="bi bi-question-circle"></i> Confirmá</h5>'
+        + '<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button></div>'
+        + '<div class="modal-body" id="sgpConfirmarTxt" style="font-size:.9rem"></div>'
+        + '<div class="modal-footer">'
+        + '<button type="button" class="btn btn-outline-neutro" data-bs-dismiss="modal">Cancelar</button>'
+        + '<button type="button" class="btn btn-acento" id="sgpConfirmarSi">Sí, seguir</button>'
+        + '</div></div></div>';
+      document.body.appendChild(caja);
+    }
+
+    // **Con id y no con `data-*`.** El modal lo dibuja este script, así que un
+    // `data-algo` no aparece en ninguna vista y `AndamiajeTest` lo marca como
+    // JS apuntando a un marcado que no existe — que es justo lo que esa prueba
+    // tiene que detectar, y no conviene enseñarle a mirar para otro lado.
+    caja.querySelector('#sgpConfirmarTxt').textContent = texto;
+    var modal = window.bootstrap.Modal.getOrCreateInstance(caja);
+
+    // El botón se reemplaza para no acumular escuchas de confirmaciones
+    // anteriores: si no, el segundo «sí» dispararía también la primera acción.
+    var si = caja.querySelector('#sgpConfirmarSi');
+    var nuevo = si.cloneNode(true);
+    si.parentNode.replaceChild(nuevo, si);
+    nuevo.addEventListener('click', function () { modal.hide(); alAceptar(); });
+
+    modal.show();
+  }
+  window.SGPConfirmar = confirmar;
+
+  // ---------------------------------------------------------------------
+  // Los avisos que se dibujan como ventana (`flash($msg, 'modal')`)
+  // ---------------------------------------------------------------------
+  // Se abren solos: es lo que los distingue de la franja, que se cierra sin
+  // leerse. Si Bootstrap no cargó no pasa nada — el marcado deja una franja de
+  // respaldo con el mismo texto, así que el aviso nunca desaparece.
+  document.querySelectorAll('[data-sgp-abrir]').forEach(function (caja) {
+    if (!window.bootstrap || !window.bootstrap.Modal) return;
+    window.bootstrap.Modal.getOrCreateInstance(caja).show();
+
+    // Recién ahora se saca la franja de respaldo: si la ventana no se pudo
+    // abrir, el texto tiene que seguir estando en algún lado.
+    var respaldo = document.querySelector('[data-sgp-respaldo="' + caja.id + '"]');
+    if (respaldo) respaldo.remove();
+  });
+
+  document.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!(form instanceof HTMLFormElement)) return;
+
+    if (!validarMiles(form)) { ev.preventDefault(); return; }
+
+    var enviado = ev.submitter;
+    var pregunta = (enviado && enviado.getAttribute('data-confirmar')) || form.getAttribute('data-confirmar');
+    if (pregunta && form.dataset.confirmado !== '1') {
+      ev.preventDefault();
+      confirmar(pregunta, function () {
+        // Se marca antes de reenviar para no volver a preguntar, y se
+        // desmarca después: si el servidor rechaza y la persona vuelve a
+        // apretar, la pregunta tiene que aparecer de nuevo.
+        form.dataset.confirmado = '1';
+        if (enviado && enviado.name) {
+          // El `submitter` desaparece al enviar por código, y con él el valor
+          // del botón que se apretó — que en varias pantallas es el que dice
+          // QUÉ se está haciendo.
+          var oculto = document.createElement('input');
+          oculto.type = 'hidden';
+          oculto.name = enviado.name;
+          oculto.value = enviado.value;
+          form.appendChild(oculto);
+        }
+        form.requestSubmit ? form.requestSubmit() : form.submit();
+        setTimeout(function () { form.dataset.confirmado = ''; }, 100);
+      });
+
+      return;
+    }
+
+    // Bloquea el botón para que no se registre dos veces la misma operación
+    if (form.dataset.enviando === '1') { ev.preventDefault(); return; }
+    form.dataset.enviando = '1';
+    setTimeout(function () {
+      form.querySelectorAll('button[type=submit], button:not([type])').forEach(function (b) {
+        b.disabled = true;
+        if (!b.dataset.textoOriginal) b.dataset.textoOriginal = b.innerHTML;
+      });
+    }, 0);
+    // Si la navegación no ocurre (validación del servidor), se rehabilita
+    setTimeout(function () {
+      form.dataset.enviando = '';
+      form.querySelectorAll('button[disabled]').forEach(function (b) { b.disabled = false; });
+      // Y se apaga la señal de carga: dejarla girando sobre un formulario
+      // que ya no está esperando nada es peor que no haberla puesto.
+      form.querySelectorAll('.btn.cargando').forEach(function (b) { window.SGPCarga.liberar(b); });
+      window.SGPCarga.todoListo();
+    }, 8000);
+  });
+
+  // Enlaces que piden confirmación
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest ? ev.target.closest('a[data-confirmar]') : null;
+    if (!a || a.dataset.confirmado === '1') { return; }
+    ev.preventDefault();
+    confirmar(a.getAttribute('data-confirmar'), function () {
+      a.dataset.confirmado = '1';
+      a.click();
+      setTimeout(function () { a.dataset.confirmado = ''; }, 100);
+    });
+  });
+
+  function iniciar() { prepararCampos(); prepararFiltros(); }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', iniciar);
+  } else {
+    iniciar();
+  }
+
+  window.SGP = { prepararCampos: prepararCampos, prepararFiltros: prepararFiltros, valorNumerico: valorNumerico };
+})();
+
+// ---------------------------------------------------------------------
+//  Borrador del formulario principal
+//
+//  Las altas rápidas (crear una sucursal desde «Nuevo usuario», un cliente
+//  desde «Nueva cita») mandan su propio POST y vuelven con un redirect, así
+//  que la pantalla se dibuja otra vez y todo lo tipeado se perdía: había que
+//  cargar de nuevo nombre, apellido, usuario, email…
+//
+//  El formulario del modal declara de cuál quiere guardar el borrador:
+//    <form data-borrador="#formUsuario">
+//  y acá se le pega lo escrito en un campo `_borrador`, que el servidor
+//  guarda en la sesión y la pantalla vuelve a poner al redibujarse.
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+  document.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    var sel = form.getAttribute('data-borrador');
+    if (!sel) return;
+    // Puede haber más de un formulario (las pestañas de Cargar stock): se
+    // recorren todos y solo pisa el valor el que tenga algo escrito.
+    var principales = document.querySelectorAll(sel);
+    if (!principales.length) return;
+
+    var datos = {};
+    Array.prototype.forEach.call(principales, function (principal) {
+      new FormData(principal).forEach(function (valor, clave) {
+        if (clave === '_csrf' || clave === '_borrador') return;
+        if (clave.slice(-2) === '[]') {
+          clave = clave.slice(0, -2);
+          if (!Array.isArray(datos[clave])) datos[clave] = [];
+          datos[clave].push(valor);
+        } else if (valor !== '' || !(clave in datos)) {
+          datos[clave] = valor;
+        }
+      });
+    });
+
+    var campo = form.querySelector('input[name="_borrador"]');
+    if (!campo) {
+      campo = document.createElement('input');
+      campo.type = 'hidden';
+      campo.name = '_borrador';
+      form.appendChild(campo);
+    }
+    campo.value = JSON.stringify(datos);
+  }, true);   // en captura: corre antes del bloqueo de doble envío
+})();
+
+// ---------------------------------------------------------------------
+//  Dónde cae la plata: la caja para el efectivo, la cuenta para el banco
+//
+//  Desde la 7.121.0 la cuenta bancaria es una caja dedicada al banco, así
+//  que cada cobro, pago o movimiento tiene que decir a dónde va: el
+//  efectivo al cajón, la transferencia a la cuenta, y un pago mixto a los
+//  dos. Este bloque muestra u oculta los combos según el medio elegido:
+//
+//    · `[data-caja-bloque]`      «¿a qué caja?»  — sólo si alguna línea es
+//                                efectivo
+//    · `.sgp-extra-cuenta-fila` «¿a qué cuenta?» — por línea, sólo si ESA
+//                                línea es transferencia, cheque o billetera
+//    · `[data-cuenta-bloque]`    «¿de qué cuenta sale?» — en los pagos,
+//                                que tienen un solo medio
+//
+//  **Arranca todo visible y lo esconde este script**: con `app.js` caído
+//  se ven los combos y se elige igual. Y esconder NO es el control: el
+//  servidor decide caja o cuenta por el TIPO del medio, no por lo que
+//  llegó en el formulario.
+//
+//  Va ANTES del bloque del cobro a propósito: ése arma sus líneas al
+//  cargar el script y llama a `window.sgpAcomodarDonde` para cada una.
+//  El combo de método se busca **dentro del mismo formulario**, no por un
+//  id: la pantalla de pagos al personal dibuja una fila por profesional y
+//  los ids se repetirían.
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+  var BANCARIOS = ['BANCO', 'CHEQUE', 'OTRO'];
+
+  function tipoDe(sel) {
+    var op = sel && sel.options[sel.selectedIndex];
+    return op ? (op.getAttribute('data-tipo') || '') : '';
+  }
+
+  function acomodar(form) {
+    if (!form) return;
+    var medios = form.querySelectorAll('select.sgp-cobro-metodo, select[name="id_metodo_pago"]');
+    if (!medios.length) return;
+
+    var hayEfectivo = false, hayBanco = false;
+    medios.forEach(function (sel) {
+      var tipo = tipoDe(sel);
+      if (tipo === 'EFECTIVO') hayEfectivo = true;
+      if (BANCARIOS.indexOf(tipo) >= 0) hayBanco = true;
+
+      // El combo de cuenta de ESTA línea: dentro de la línea del cobro, o
+      // en el formulario cuando hay un solo medio (la seña confirmada).
+      var cont = sel.closest('.sgp-cobro-linea') || form;
+      var fila = cont.querySelector('.sgp-extra-cuenta-fila');
+      if (fila) {
+        var va = BANCARIOS.indexOf(tipo) >= 0;
+        fila.style.display = va ? '' : 'none';
+        var cta = fila.querySelector('select');
+        if (cta && va && !cta.getAttribute('data-tocado')) {
+          // Se propone la cuenta del mismo tipo: la billetera para el
+          // pago por billetera, el banco para la transferencia. Si la
+          // persona ya eligió, no se le pisa.
+          var quiero = tipo === 'OTRO' ? 'OTRO' : 'BANCO';
+          for (var i = 0; i < cta.options.length; i++) {
+            if (cta.options[i].getAttribute('data-tipo') === quiero) { cta.selectedIndex = i; break; }
+          }
+        }
+      }
+    });
+
+    form.querySelectorAll('[data-caja-bloque]').forEach(function (b) {
+      b.classList.toggle('d-none', !hayEfectivo);
+    });
+    form.querySelectorAll('[data-cuenta-bloque]').forEach(function (b) {
+      b.classList.toggle('d-none', !hayBanco);
+      // Vaciarlo al esconderlo: si no, queda mandando una cuenta que la
+      // persona ya no está viendo.
+      if (!hayBanco) { var s = b.querySelector('select'); if (s) s.value = ''; }
+    });
+  }
+
+  window.sgpAcomodarDonde = acomodar;
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form').forEach(function (form) {
+      if (!form.querySelector('[data-caja-bloque], [data-cuenta-bloque], .sgp-extra-cuenta-fila')) return;
+      form.addEventListener('change', function (ev) {
+        var t = ev.target;
+        if (t.matches('.sgp-extra-cuenta-fila select')) { t.setAttribute('data-tocado', '1'); return; }
+        if (t.matches('select.sgp-cobro-metodo, select[name="id_metodo_pago"]')) acomodar(form);
+      });
+      acomodar(form);
+    });
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  Cobro con varios medios de pago
+//
+//  Una factura puede cobrarse en partes: algo en efectivo, algo con tarjeta,
+//  algo con cheque. Cada línea termina siendo un cobro propio en la base.
+//  Los campos de tarjeta o de banco aparecen solo cuando el medio elegido
+//  los necesita, para no llenar la pantalla de campos que no van.
+//
+//  Va al final del archivo a propósito: usa window.SGP, que se define arriba.
+// ---------------------------------------------------------------------
+(function () {
+  'use strict';
+  document.querySelectorAll('.sgp-cobro').forEach(function (caja) {
+    var molde   = caja.parentNode.querySelector('.sgp-cobro-molde');
+    var cont    = caja.querySelector('.sgp-cobro-lineas');
+    var agregar = caja.querySelector('.sgp-cobro-add');
+    var resumen = caja.querySelector('.sgp-cobro-total');
+    var saldo   = parseFloat(caja.getAttribute('data-saldo') || '0');
+    // Lo que viene propuesto en la primera linea. Casi siempre es todo lo
+    // que falta, pero confirmando una sena es el monto de LA SENA: proponer
+    // el total de la cita hacia cobrar de mas con un clic.
+    var sugerido = parseFloat(caja.getAttribute('data-sugerido') || '') || saldo;
+    if (!molde || !cont) return;
+
+    function aNumero(txt) {
+      var s = String(txt || '').replace(/\./g, '').replace(',', '.').replace(/[^\d.]/g, '');
+      var n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    }
+    function miles(n) { return n.toLocaleString('es-PY', { maximumFractionDigits: 0 }); }
+
+    function recalcular() {
+      var suma = 0;
+      cont.querySelectorAll('.sgp-cobro-monto').forEach(function (i) { suma += aNumero(i.value); });
+      var falta = saldo - suma;
+      var texto, clase;
+      if (suma === 0)        { texto = 'Sin montos cargados.'; clase = 'text-muted-warm'; }
+      else if (falta > 0.5)  { texto = 'Suma ' + miles(suma) + ' · queda pendiente ' + miles(falta); clase = 'txt-acento'; }
+      else if (falta < -0.5) { texto = 'Suma ' + miles(suma) + ' · se pasa ' + miles(-falta) + ' del saldo'; clase = 'txt-no'; }
+      else                   { texto = 'Suma ' + miles(suma) + ' · cubre todo el saldo'; clase = 'txt-ok'; }
+      resumen.className = 'sgp-cobro-total mt-3 ' + clase;
+      resumen.textContent = texto;
+      // No dejar enviar si se pasa del saldo
+      var f = caja.closest('form');
+      var btn = f ? f.querySelector('.modal-footer .btn-acento') : null;
+      if (btn) btn.disabled = falta < -0.5;
+    }
+
+    // Qué dice el campo «Referencia» según el medio. Decía siempre «Nº de
+    // operación, boleta…», y con efectivo eso prometía una boleta que no
+    // existe: `nro_boleta` es una columna de `cobro_tarjeta`, no del cobro.
+    var PISTA = {
+      EFECTIVO: 'Nº de recibo interno (opcional)',
+      TARJETA:  'Referencia interna (la boleta va abajo)',
+      BANCO:    'Referencia interna (el nº de operación va abajo)',
+      CHEQUE:   'Referencia interna (el nº de cheque va abajo)',
+      OTRO:     'Nº de operación de la billetera'
+    };
+
+    function ajustarExtras(linea) {
+      var sel = linea.querySelector('.sgp-cobro-metodo');
+      var tipo = sel.options[sel.selectedIndex].getAttribute('data-tipo');
+      linea.querySelector('.sgp-extra-tarjeta').style.display = (tipo === 'TARJETA') ? '' : 'none';
+      linea.querySelector('.sgp-extra-banco').style.display   = (tipo === 'BANCO' || tipo === 'CHEQUE') ? '' : 'none';
+
+      // Transferencia y cheque comparten la tabla, no los campos: una
+      // transferencia no tiene número de cheque y un cheque no tiene número
+      // de operación. Se ocultan con `display`, así el input SIGUE en el
+      // formulario y los arreglos no se corren de lugar.
+      linea.querySelectorAll('[data-solo]').forEach(function (c) {
+        var muestra = c.getAttribute('data-solo') === tipo;
+        c.style.display = muestra ? '' : 'none';
+        if (!muestra) c.querySelectorAll('input').forEach(function (i) { i.value = ''; });
+      });
+
+      // Y la fecha se llama distinto en cada uno
+      var fe = linea.querySelector('.sgp-fecha-banco');
+      if (fe) fe.textContent = (tipo === 'CHEQUE') ? 'Fecha del cheque' : 'Fecha de la transferencia';
+
+      var ref = linea.querySelector('[name="referencia[]"]');
+      if (ref) ref.placeholder = PISTA[tipo] || 'Referencia (opcional)';
+
+      if (typeof ajustarVuelto === 'function') ajustarVuelto();
+      // La caja y la cuenta de cada línea: efectivo al cajón, banco a la
+      // cuenta (7.121.0). El bloque de arriba lo resuelve para el formulario.
+      if (window.sgpAcomodarDonde) window.sgpAcomodarDonde(caja.closest('form'));
+    }
+
+    // El vuelto es una cuenta de EFECTIVO: preguntar «¿con cuánto paga?» en una
+    // transferencia no tiene sentido, no hay billete ni cambio que dar.
+    function ajustarVuelto() {
+      var bloque = caja.querySelector('.sgp-vuelto-bloque');
+      if (!bloque) return;
+      var hayEfectivo = false;
+      cont.querySelectorAll('.sgp-cobro-metodo').forEach(function (s) {
+        var op = s.options[s.selectedIndex];
+        if (op && op.getAttribute('data-tipo') === 'EFECTIVO') hayEfectivo = true;
+      });
+      bloque.style.display = hayEfectivo ? '' : 'none';
+      if (!hayEfectivo && recibido) { recibido.value = ''; if (vueltoRes) vueltoRes.textContent = ''; }
+      else if (typeof calcularVuelto === 'function') { calcularVuelto(); }
+    }
+
+    function nuevaLinea(monto) {
+      var linea = molde.content.firstElementChild.cloneNode(true);
+      cont.appendChild(linea);
+      if (monto) linea.querySelector('.sgp-cobro-monto').value = miles(monto);
+      ajustarExtras(linea);
+      linea.querySelector('.sgp-cobro-metodo').addEventListener('change', function () { ajustarExtras(linea); recalcular(); });
+      linea.querySelector('.sgp-cobro-monto').addEventListener('input', recalcular);
+      linea.querySelector('.sgp-cobro-quitar').addEventListener('click', function () {
+        if (cont.children.length > 1) {
+          linea.remove(); recalcular();
+          if (window.sgpAcomodarDonde) window.sgpAcomodarDonde(caja.closest('form'));
+        }
+      });
+      if (window.SGP) window.SGP.prepararCampos(linea);
+      recalcular();
+      return linea;
+    }
+
+    // ---------------------------------------------------------------
+    //  Vuelto
+    //
+    //  La clienta paga con un billete más grande y hay que devolverle la
+    //  diferencia. Es una cuenta de mostrador: NO se guarda nada. Lo que se
+    //  registra como cobro sigue siendo el monto de la línea, porque el
+    //  vuelto no cambia ni el saldo de la factura ni lo que queda en el
+    //  cajón (entra 100.000 y salen 30.000: neto, los 70.000 del cobro).
+    // ---------------------------------------------------------------
+    var recibido = caja.querySelector('.sgp-vuelto-recibido');
+    var vueltoRes = caja.querySelector('.sgp-vuelto-res');
+
+    function calcularVuelto() {
+      if (!recibido || !vueltoRes) return;
+      var dado = aNumero(recibido.value);
+
+      // **Sólo las líneas en EFECTIVO.** Antes se sumaba el total del cobro,
+      // así que un pago partido —100.000 por transferencia y 20.000 en
+      // efectivo— comparaba el billete de 50.000 contra los 120.000 y
+      // contestaba «falta 70.000», cuando en realidad sobran 30.000 de
+      // vuelto. La transferencia no se paga con billetes: no hay cambio que
+      // dar por esa parte.
+      var aCobrar = 0;
+      cont.querySelectorAll('.sgp-cobro-linea').forEach(function (l) {
+        var sel = l.querySelector('.sgp-cobro-metodo');
+        var op = sel && sel.options[sel.selectedIndex];
+        if (op && op.getAttribute('data-tipo') === 'EFECTIVO') {
+          aCobrar += aNumero(l.querySelector('.sgp-cobro-monto').value);
+        }
+      });
+
+      if (dado <= 0 || aCobrar <= 0) { vueltoRes.textContent = ''; vueltoRes.className = 'sgp-vuelto-res mt-2'; return; }
+      var v = dado - aCobrar;
+      if (v < -0.5) {
+        vueltoRes.className = 'sgp-vuelto-res mt-2 txt-no';
+        vueltoRes.textContent = 'Falta ' + miles(-v) + ' para cubrir los ' + miles(aCobrar) + ' en efectivo.';
+      } else if (v < 0.5) {
+        vueltoRes.className = 'sgp-vuelto-res mt-2 txt-ok';
+        vueltoRes.textContent = 'Justo: no hay vuelto.';
+      } else {
+        vueltoRes.className = 'sgp-vuelto-res mt-2 sgp-vuelto-monto';
+        vueltoRes.textContent = 'Vuelto a entregar: ' + miles(v);
+      }
+    }
+    if (recibido) {
+      recibido.addEventListener('input', calcularVuelto);
+      cont.addEventListener('input', calcularVuelto);
+    }
+
+    // **El tope puede cambiar después de dibujado.** En la agenda, el cobro
+    // de una cita de varias personas pasa de «todo el grupo junto» a «lo de
+    // una sola», y ahí el saldo contra el que se compara es otro: lo que le
+    // falta a ESA persona. La vista lo avisa con `sgp:cobro-saldo` y acá se
+    // toma — la primera línea se rehace con el monto propuesto y el resumen
+    // vuelve a decir cuánto queda, contra el número nuevo.
+    caja.addEventListener('sgp:cobro-saldo', function (ev) {
+      var d = ev.detail || {};
+      var nuevo = parseFloat(d.saldo);
+      if (isNaN(nuevo)) return;
+      saldo = nuevo;
+      caja.setAttribute('data-saldo', String(nuevo));
+      var primera = cont.querySelector('.sgp-cobro-monto');
+      var prop = parseFloat(d.sugerido);
+      if (primera && !isNaN(prop)) primera.value = prop > 0 ? miles(prop) : '';
+      recalcular();
+      calcularVuelto();
+    });
+
+    // Arranca con una sola línea por el saldo completo: el caso más común
+    nuevaLinea(sugerido);
+    // El vuelto depende del medio elegido, y el primero ya esta puesto: se
+    // ajusta aca, cuando `recibido` y `vueltoRes` ya existen. Llamado solo
+    // desde `ajustarExtras` quedaba corriendo antes de que se declararan.
+    ajustarVuelto();
+    agregar.addEventListener('click', function () { nuevaLinea(0); });
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  Casilla maestra de un grupo (Configuración → Roles)
+//
+//  La matriz de permisos tiene un módulo por bloque y sus submódulos
+//  adentro. La casilla del título prende o apaga todo el bloque de una,
+//  y refleja lo que hay marcado: llena si están todos, a medio marcar
+//  (indeterminate) si hay algunos, vacía si no hay ninguno.
+//
+//  La maestra NO se envía: no lleva `name`. Lo que se guarda son las
+//  casillas de los submódulos, que son las claves que acepta el POST.
+// ---------------------------------------------------------------------
+(function () {
+  // ---- La campanita: abrirla marca lo visto -------------------------
+  // Baja el numerito rojo sin recargar. **No resuelve nada**: el renglon se
+  // queda en la bandeja, la caja sigue abierta. Es lo que hace cualquier
+  // bandeja de correo al abrirse.
+  //
+  // Lo que se manda son SOLO las claves de las alertas sin ver, que el
+  // servidor vuelve a validar contra la campanita de quien llama: los
+  // pendientes —lo que falta cargar— no entran, siguen contando hasta que
+  // alguien los cargue.
+  //
+  // Sin JavaScript la bandeja se abre igual y se lee igual; lo unico que no
+  // pasa es que el numero baje, que es una comodidad y no el aviso.
+  document.querySelectorAll('[data-sgp-bandeja]').forEach(function (campana) {
+    var claves;
+    try { claves = JSON.parse(campana.getAttribute('data-sgp-bandeja') || '[]'); }
+    catch (e) { claves = []; }
+    if (!claves.length) { return; }
+
+    var ruta = document.querySelector('meta[name="sgp-alertas-vistas"]');
+    var token = document.querySelector('meta[name="csrf-token"]');
+    if (!ruta || !token) { return; }
+
+    campana.addEventListener('shown.bs.dropdown', function alUsar() {
+      campana.removeEventListener('shown.bs.dropdown', alUsar);
+      fetch(ruta.getAttribute('content'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': token.getAttribute('content'),
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({ claves: claves })
+      }).then(function () {
+        var n = campana.querySelector('.sgp-campana-n');
+        // Quedan los pendientes, que no dejan de contar nunca.
+        var quedan = campana.parentNode.querySelectorAll('.sgp-alerta.sin-ver').length - claves.length;
+        campana.parentNode.querySelectorAll('.sgp-alerta.sin-ver').forEach(function (fila, i) {
+          if (i < claves.length) { fila.classList.remove('sin-ver'); }
+        });
+        if (n && quedan > 0) { n.textContent = String(quedan); }
+        else if (n) { n.remove(); campana.classList.remove('tiene-aviso'); }
+      }).catch(function () { /* el aviso ya se leyo: que falle no rompe nada */ });
+    });
+  });
+
+  // ---- Un combo que manda su formulario al elegir -------------------
+  // Hoy lo usa el de sucursal de la barra: cambiar de local es una sola
+  // decision, asi que pedir ademas un boton de confirmar es un clic de mas.
+  //
+  // **El boton de respaldo se dibuja SIEMPRE y lo escondemos aca.** Al reves
+  // —dibujarlo desde el JS— quien tenga `app.js` caido se queda sin forma de
+  // cambiar de local: la regla de siempre, lo que adorna puede faltar.
+  document.querySelectorAll('[data-sgp-envia]').forEach(function (combo) {
+    var boton = document.querySelector(combo.getAttribute('data-sgp-envia'));
+    if (boton) { boton.hidden = true; }
+    combo.addEventListener('change', function () {
+      if (combo.form) { combo.form.submit(); }
+    });
+  });
+
+  var maestras = document.querySelectorAll('[data-marca-todo]');
+  if (!maestras.length) return;
+
+  maestras.forEach(function (maestra) {
+    var grupo = document.querySelector(maestra.getAttribute('data-marca-todo'));
+    if (!grupo) return;
+    var hijos = grupo.querySelectorAll('input[type=checkbox]');
+    if (!hijos.length) return;
+
+    function reflejar() {
+      var n = 0;
+      hijos.forEach(function (h) { if (h.checked) n++; });
+      maestra.checked = (n === hijos.length);
+      maestra.indeterminate = (n > 0 && n < hijos.length);
+    }
+
+    maestra.addEventListener('change', function () {
+      // Al tocarla desde el estado a medio marcar, prende todo
+      var poner = maestra.indeterminate ? true : maestra.checked;
+      hijos.forEach(function (h) {
+        if (h.disabled) { return; }
+        h.checked = poner;
+        // **Las maestras se pueden anidar, y sin esto la de adentro queda
+        // mintiendo.** En Roles hay una por modulo y una por rol: la del rol
+        // marca todo, incluidas las de los modulos, pero asignar `.checked`
+        // no dispara `change`, asi que las de adentro se quedaban con su
+        // `indeterminate` de antes — el cuadrito a medio marcar sobre un
+        // grupo que ya estaba entero.
+        //
+        // Se avisa desde los hijos que NO son maestras: el evento burbujea
+        // hasta el grupo de cada maestra anidada y la hace refrescarse. Sin
+        // la condicion, una maestra se avisaria a si misma y volveria a
+        // recorrer a sus hijos.
+        if (!h.hasAttribute('data-marca-todo')) {
+          h.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+      reflejar();
+    });
+    grupo.addEventListener('change', reflejar);
+    reflejar();
+  });
+})();
+
+//  Canje y servicio van juntos: el canje NO reemplaza al servicio, lo acompaña.
+//  Un servicio canjeado dura lo mismo, lo hace quien lo hace y necesita un hueco
+//  libre igual; lo único que cambia es que no se cobra.
+//
+//  Por eso los dos sentidos se atan solos:
+//   · marcar el canje marca su servicio —si no, el vale no se aplica y la
+//     clienta pierde los puntos sin recibir nada—;
+//   · **marcar el servicio marca su canje**, que es lo que faltaba: había que
+//     acordarse de bajar y tildarlo, y quien no lo hacía pagaba un servicio que
+//     ya tenía pago.
+//
+//  Se activa con `data-canjes="#bloque"` en el contenedor de servicios, y cada
+//  canje declara su servicio en `data-servicio`.
+(function () {
+  var bloques = document.querySelectorAll('[data-canjes]');
+  if (!bloques.length) { return; }
+
+  bloques.forEach(function (cont) {
+    var caja = document.querySelector(cont.dataset.canjes);
+    if (!caja) { return; }
+
+    function tildar(el, valor) {
+      if (!el || el.checked === valor) { return; }
+      el.checked = valor;
+      // El evento se dispara a mano porque de él cuelga el recálculo de
+      // horarios del selector de agenda.
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    caja.querySelectorAll('.sgp-canje').forEach(function (f) {
+      var chk = f.querySelector('input[type="checkbox"]');
+      var srv = cont.querySelector('.srv[value="' + f.dataset.servicio + '"]');
+      if (!chk || !srv) { return; }
+
+      chk.addEventListener('change', function () {
+        if (chk.checked) { tildar(srv, true); }
+      });
+
+      srv.addEventListener('change', function () {
+        // Sólo se auto-marca lo que la clienta puede usar de verdad: un canje
+        // escondido —de otra clienta— no se toca.
+        if (f.hidden || f.closest('[hidden]')) { return; }
+        tildar(chk, srv.checked);
+      });
+
+      // Si el servicio ya venía marcado —vuelta de un intento fallido—, el
+      // canje tiene que reflejarlo desde el principio.
+      if (srv.checked && !f.hidden) { chk.checked = true; }
+    });
+  });
+})();
+
+//  El filtro de bloques de Reportes salió con las pestañas: ahora cada informe
+//  es su propia pantalla, así que no hay nada que esconder. Lo detectó
+//  `AndamiajeTest`, que es exactamente para esto — un `data-*` que ninguna
+//  vista dibuja es JS que no ocurre y nadie se entera.
+
+//  El respaldo de un movimiento de caja se pide sólo cuando la clase elegida lo
+//  exige: un retiro de la propietaria no tiene comprobante que adjuntar, y
+//  pedírselo sería inventar un papel. Sin este script el bloque se ve siempre,
+//  que es el lado seguro — el servidor valida igual.
+(function () {
+  var sel = document.querySelector('[data-exige]');
+  if (!sel) { return; }
+  var caja = document.querySelector(sel.getAttribute('data-exige'));
+  if (!caja) { return; }
+
+  function ajustar() {
+    var op = sel.options[sel.selectedIndex];
+    var pide = !!(op && op.getAttribute('data-doc') === '1');
+    caja.hidden = !pide;
+    caja.querySelectorAll('input').forEach(function (i) {
+      if (i.type !== 'file') { i.required = pide; }
+      if (!pide) { i.value = ''; }
+    });
+  }
+
+  sel.addEventListener('change', ajustar);
+  ajustar();
+})();
+
+//  De dónde sale el movimiento manual: del cajón o de una cuenta bancaria
+//  (7.121.0). El faltante de caja y la devolución en efectivo son cosas del
+//  cajón —una diferencia del arqueo, y plata que estaba ahí adentro—, así que
+//  al elegir una cuenta esas clases se esconden. Sin este script se ven todas
+//  y el servidor las rechaza igual, que es el lado seguro.
+(function () {
+  var dest = document.querySelector('[data-mc-destino]');
+  var clase = document.querySelector('#mc_clase');
+  if (!dest || !clase) { return; }
+
+  function dondeElegido() {
+    if (dest.tagName === 'SELECT') {
+      var op = dest.options[dest.selectedIndex];
+      return op ? (op.getAttribute('data-donde') || 'caja') : 'caja';
+    }
+    return dest.getAttribute('data-donde') || 'caja';
+  }
+
+  function ajustar() {
+    var banco = dondeElegido() === 'cuenta';
+    Array.prototype.forEach.call(clase.options, function (op) {
+      if (op.getAttribute('data-solo-caja') === '1') {
+        op.hidden = banco;
+        op.disabled = banco;
+        if (banco && op.selected) { clase.value = ''; }
+      }
+    });
+    if (banco) { clase.dispatchEvent(new Event('change')); }
+  }
+
+  dest.addEventListener('change', ajustar);
+  ajustar();
+})();
+
+//  Al elegir «Devolución al cliente» se elige la NOTA, y el monto sale de ella:
+//  el documento manda. Emitir la nota y devolver la plata son dos actos, y si el
+//  monto se pudiera tipear volverían a poder quedar dos números distintos para
+//  la misma devolución.
+(function () {
+  var sel = document.querySelector('[data-nota]');
+  if (!sel) { return; }
+  var caja = document.querySelector(sel.getAttribute('data-nota'));
+  var nc = caja && caja.querySelector('select');
+  var monto = document.querySelector('#mc_monto');
+  if (!caja || !nc || !monto) { return; }
+
+  function ajustar() {
+    var op = sel.options[sel.selectedIndex];
+    var esDev = !!(op && /Devoluci/.test(op.textContent));
+    caja.hidden = !esDev;
+    nc.required = esDev;
+    monto.readOnly = esDev;
+    if (!esDev) { nc.value = ''; }
+    ponerMonto();
+  }
+
+  function ponerMonto() {
+    if (caja.hidden) { return; }
+    var op = nc.options[nc.selectedIndex];
+    var v = op ? op.getAttribute('data-monto') : '';
+    monto.value = v ? Number(v).toLocaleString('es-PY', { maximumFractionDigits: 0 }) : '';
+  }
+
+  sel.addEventListener('change', ajustar);
+  nc.addEventListener('change', ponerMonto);
+  ajustar();
+})();
+
+// ---------------------------------------------------------------------
+//  El campo Ciudad: combo, con la salida de «Otra».
+//
+//  El texto libre se esconde salvo que el combo esté en «Otra ciudad…».
+//  **Arranca visible en el HTML a propósito**: si este archivo no cargó se
+//  ven los dos campos y el formulario sigue siendo usable, que es la regla
+//  de siempre — un adorno tiene que poder faltar.
+// ---------------------------------------------------------------------
+(function () {
+  document.querySelectorAll('select.sgp-ciudad[data-otra]').forEach(function (sel) {
+    var otra = document.querySelector(sel.getAttribute('data-otra'));
+    if (!otra) return;
+
+    function reflejar() {
+      var libre = sel.value === '__otra';
+      otra.style.display = libre ? '' : 'none';
+      if (libre) { var i = otra.querySelector('input'); if (i) i.focus(); }
+    }
+    sel.addEventListener('change', reflejar);
+    // Sin `focus` en la primera pasada: robaría el cursor al abrir la pantalla.
+    otra.style.display = sel.value === '__otra' ? '' : 'none';
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  Buscador de la pantalla de elegir sucursal.
+//
+//  Con dos locales sobra; con quince, recorrer la lista a ojo es el trabajo
+//  que la pantalla tendría que ahorrar. Filtra sobre el texto ya dibujado,
+//  así que **sin JavaScript se ven todas**, que es como estaba antes.
+// ---------------------------------------------------------------------
+(function () {
+  var caja = document.querySelector('[data-filtra-sucursales]');
+  if (!caja) return;
+  var lista = document.querySelector(caja.getAttribute('data-filtra-sucursales'));
+  if (!lista) return;
+
+  var items = Array.prototype.slice.call(lista.children);
+  var vacio = document.querySelector('[data-sin-sucursal]');
+
+  caja.addEventListener('input', function () {
+    var q = caja.value.trim().toLowerCase();
+    var n = 0;
+    items.forEach(function (it) {
+      var ok = q === '' || it.textContent.toLowerCase().indexOf(q) !== -1;
+      it.style.display = ok ? '' : 'none';
+      if (ok) n++;
+    });
+    if (vacio) vacio.style.display = n ? 'none' : '';
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  El combo del profesional aparece con su servicio.
+//
+//  Con quince servicios en pantalla había quince combos de «quien me
+//  atienda» colgando de servicios que la clienta no pidió. Es ruido que
+//  compite con lo único que hay que hacer ahí —marcar— y que además
+//  sugiere una decisión sobre algo que todavía no se eligió.
+//
+//  **Arranca visible en el HTML y lo esconde este archivo.** Si `app.js`
+//  no cargó se ven todos y la reserva sigue funcionando entera, elegir
+//  profesional incluido: misma regla que la salida de la huella y que el
+//  texto libre del combo de ciudad.
+// ---------------------------------------------------------------------
+(function () {
+  var combos = document.querySelectorAll('[data-prof-de]');
+  if (!combos.length) return;
+
+  combos.forEach(function (sel) {
+    var chk = document.querySelector(sel.getAttribute('data-prof-de'));
+    if (!chk) return;
+
+    function reflejar() {
+      // `display` y no el atributo `hidden`: Bootstrap le pone
+      // `display:block` a `.form-select` y le gana al estilo del navegador.
+      sel.style.display = chk.checked ? '' : 'none';
+    }
+
+    // **El canje marca su servicio solo y despacha `change`**, así que el
+    // combo también aparece cuando lo marcó el sistema y no la persona.
+    // El valor elegido se conserva al desmarcar: si vuelve a marcarlo,
+    // vuelve con su profesional puesto.
+    chk.addEventListener('change', reflejar);
+    reflejar();
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  El arqueo: la diferencia se ve mientras se cuenta.
+//
+//  Quien cuenta el cajón tiene que poder ver si cuadra ANTES de confirmar,
+//  no enterarse por el aviso de después. Es una cuenta de mostrador y no
+//  se guarda: **la diferencia que vale es la que calcula la base**
+//  (`fn_caja_diferencia`), con el saldo del momento del cierre.
+//
+//  Sin `app.js` el campo sigue andando: se escribe el monto y se cierra
+//  igual, sólo que sin el adelanto.
+// ---------------------------------------------------------------------
+(function () {
+  var campos = document.querySelectorAll('[data-arqueo]');
+  if (!campos.length) return;
+
+  campos.forEach(function (campo) {
+    var ref = document.querySelector(campo.getAttribute('data-arqueo'));
+    var out = document.querySelector(campo.getAttribute('data-arqueo-salida'));
+    if (!ref || !out) return;
+
+    var esperado = parseFloat(ref.getAttribute('data-valor') || '0');
+
+    function reflejar() {
+      // Los campos de dinero se muestran con separador de miles, así que se
+      // limpian igual que lo hace `num()` en el servidor.
+      var txt = campo.value.replace(/\./g, '').replace(',', '.').trim();
+      if (txt === '') { out.textContent = ''; out.className = ''; return; }
+
+      var dif = parseFloat(txt) - esperado;
+      if (isNaN(dif)) { out.textContent = ''; out.className = ''; return; }
+
+      var abs = Math.abs(dif).toLocaleString('es-PY', { maximumFractionDigits: 0 });
+      if (Math.abs(dif) < 0.01) {
+        // La cuenta bancaria usa el mismo campo (7.122.0) y dice lo suyo.
+        out.textContent = campo.getAttribute('data-arqueo-cuadra') || '✓ La caja cuadra.';
+        out.className = 'txt-ok';
+      } else if (dif > 0) {
+        out.textContent = 'Sobran Gs. ' + abs + ' respecto de lo esperado.';
+        out.className = 'txt-acento';
+      } else {
+        out.textContent = 'Faltan Gs. ' + abs + ' respecto de lo esperado.';
+        out.className = 'txt-no';
+      }
+    }
+
+    campo.addEventListener('input', reflejar);
+    reflejar();
+  });
+})();
+
+// ---------------------------------------------------------------------
+//  Campos que sólo admiten números: se filtra AL ESCRIBIR.
+//
+//  El servidor ya rechazaba una cédula con letras —`Persona::error()` lo
+//  hace desde la 6.4.0—, pero enterarse después de apretar Guardar, con
+//  el formulario entero cargado, es la peor forma de saberlo. Acá el
+//  carácter que no corresponde simplemente no entra.
+//
+//  **La pantalla NO puede ser más estricta que el servidor**, o la
+//  persona no podría escribir algo que el sistema sí acepta. Cada juego
+//  de caracteres es el de su regla en `Persona::error()`:
+//
+//    numeros    dígitos pelados      · puntos, cuotas, días, códigos
+//    documento  dígitos . espacio -  · cédula        /^[0-9][0-9\.\s-]{2,19}$/
+//    ruc        lo anterior + k K    · RUC           …-?[0-9kK]?$/
+//    telefono   dígitos + ( ) . - y espacio          /^[+()0-9\.\s-]+$/
+//
+//  Es una comodidad, no el control: `data-solo` se puede sacar con las
+//  herramientas del navegador y el POST igual pasa por el servidor.
+// ---------------------------------------------------------------------
+(function () {
+  var JUEGOS = {
+    numeros:   /[^0-9]/g,
+    documento: /[^0-9.\s-]/g,
+    ruc:       /[^0-9.\s\-kK]/g,
+    telefono:  /[^0-9+().\s-]/g
+  };
+
+  function filtrar(campo, juego) {
+    var malos = JUEGOS[juego];
+    if (!malos) return;
+
+    campo.addEventListener('input', function () {
+      var limpio = campo.value.replace(malos, '');
+      if (limpio === campo.value) return;
+
+      // Se conserva la posición del cursor: sin esto, corregir una letra en
+      // el medio de un número tirado el cursor al final en cada tecla.
+      var pos = campo.selectionStart;
+      var quitados = campo.value.slice(0, pos).replace(malos, '').length;
+      campo.value = limpio;
+      try { campo.setSelectionRange(quitados, quitados); } catch (e) { /* no todos lo admiten */ }
+    });
+  }
+
+  document.querySelectorAll('[data-solo]').forEach(function (campo) {
+    filtrar(campo, campo.getAttribute('data-solo'));
+  });
+
+  // -------------------------------------------------------------------
+  //  El alias de transferencia cambia de forma con su tipo.
+  //
+  //  En Paraguay el alias es un identificador que la persona ya tiene
+  //  —cédula, RUC, celular o correo— así que el ejemplo y los caracteres
+  //  que se dejan escribir dependen de cuál eligió. Ver «Datos de pago».
+  //
+  //  **Es una comodidad, no el control**: el servidor valida igual, y sin
+  //  `app.js` el campo se sigue pudiendo llenar.
+  // -------------------------------------------------------------------
+  document.querySelectorAll('[data-alias-tipo]').forEach(function (combo) {
+    var campo = document.querySelector(combo.getAttribute('data-alias-tipo'));
+    if (!campo) return;
+
+    var base = campo.getAttribute('placeholder') || '';
+    var actual = null;
+
+    function aplicar() {
+      var op = combo.options[combo.selectedIndex],
+          ej = op ? op.getAttribute('data-ph') : '',
+          juego = op ? op.getAttribute('data-solo') : '';
+
+      campo.setAttribute('placeholder', ej ? 'Ej: ' + ej : base);
+      campo.disabled = combo.value === '';
+
+      // El filtro se engancha una sola vez por juego: `filtrar()` agrega un
+      // listener, así que reengancharlo en cada cambio los acumularía.
+      if (juego && juego !== actual) {
+        filtrar(campo, juego);
+        actual = juego;
+      }
+    }
+
+    combo.addEventListener('change', function () {
+      // Al cambiar de tipo lo escrito ya no aplica: un RUC no es un correo.
+      if (campo.value !== '') { campo.value = ''; }
+      aplicar();
+    });
+    aplicar();
+  });
+})();
+
+// El motivo de la diferencia aparece cuando hay diferencia: pedirlo siempre
+// haría escribir «ok» todos los días y con eso deja de significar algo.
+//
+// **Uno por arqueo, no uno por página.** Buscaba `#arqueoDif` y `#bloqueMotivo`
+// por id, y desde que la lista de Cajas abre el arqueo de cada tarjeta en su
+// propio modal hay varios: con el id repetido sólo el primero se enteraba de
+// la diferencia. El campo declara los suyos con `data-arqueo-salida` y
+// `data-arqueo-motivo`, así que cada modal escucha su propia salida.
+(function () {
+  document.querySelectorAll('[data-arqueo-motivo]').forEach(function (campo) {
+    var dif = document.querySelector(campo.getAttribute('data-arqueo-salida') || ''),
+        bloque = document.querySelector(campo.getAttribute('data-arqueo-motivo'));
+    if (!dif || !bloque) return;
+
+    new MutationObserver(function () {
+      var hay = /Sobran|Faltan/.test(dif.textContent || '');
+      bloque.style.display = hay ? '' : 'none';
+      var motivo = bloque.querySelector('input');
+      if (motivo) { motivo.required = hay; if (!hay) { motivo.value = ''; } }
+    }).observe(dif, { childList: true, characterData: true, subtree: true });
+  });
+})();
+
+// «¿Quién se atiende?» aparece con «para otra persona», y «mis alergias» se
+// va: la que se sienta en el sillón es la otra. Son dos radios con el mismo
+// `name` desde la 7.119.0 —antes una casilla—, así que se escucha el cambio
+// de cualquiera de los dos; el servidor sigue leyendo `para_otra_persona`.
+(function () {
+  var chk = document.getElementById('paraOtro'),
+      bloque = document.getElementById('bloqueParaQuien'),
+      mias = document.getElementById('bloqueMisAlergias');
+  if (!chk || !bloque) return;
+
+  function reflejar() {
+    bloque.style.display = chk.checked ? '' : 'none';
+    if (mias) { mias.style.display = chk.checked ? 'none' : ''; }
+    // **Adentro hay más de un campo desde la 7.113.0**: el nombre y las
+    // alergias de esa persona. Con `querySelector` a secas se limpiaba el
+    // primero nada más, así que desmarcar la casilla dejaba una alergia
+    // cargada a nombre de nadie — y el servidor la descarta, pero la
+    // pantalla seguiría mostrándola escrita.
+    bloque.querySelectorAll('input, textarea').forEach(function (campo) {
+      if (!chk.checked) { campo.value = ''; }
+    });
+    // El obligatorio es el nombre: sin él la cita no dice para quién es.
+    // La alergia es opcional — casi nadie tiene una.
+    var nom = bloque.querySelector('#nombre_para');
+    if (nom) { nom.required = chk.checked; }
+  }
+  document.querySelectorAll('[name="para_otra_persona"]').forEach(function (r) {
+    r.addEventListener('change', reflejar);
+  });
+  reflejar();
+})();
+
+/* ------------------------------------------------------------------
+   Reservar: la tarjeta elegida se marca, y el resumen dice cuánto sale
+
+   Dos cosas que la pantalla no hacía. **La tarjeta no se resaltaba al
+   marcarla**: la clase `elegida` la ponía el servidor al dibujar, así
+   que el borde de oro aparecía recién al recargar — o sea nunca,
+   porque la clienta marca y sigue. Y **no había un total**: cada
+   tarjeta mostraba su precio y sumarlos era trabajo de la clienta.
+
+   Los dos salen de los `data-` que la tarjeta ya trae, así que no se
+   consulta al servidor. Es un adorno que puede faltar: sin `app.js` se
+   sigue pudiendo reservar y cada tarjeta muestra su precio.
+   ------------------------------------------------------------------ */
+(function () {
+  var casillas = document.querySelectorAll('.srv');
+  if (!casillas.length) return;
+
+  var caja = document.getElementById('resumenCita');
+  var lista = caja && caja.querySelector('[data-resumen="lista"]');
+  var elTot = caja && caja.querySelector('[data-resumen="total"]');
+  var elDur = caja && caja.querySelector('[data-resumen="dur"]');
+  var elSena = caja && caja.querySelector('[data-resumen="sena"]');
+  var cajaSena = caja && caja.querySelector('[data-resumen="sena-caja"]');
+  var detSena = caja && caja.querySelector('[data-resumen="sena-detalle"]');
+
+  function gs(n) {
+    return 'Gs. ' + Math.round(n).toLocaleString('es-PY', { maximumFractionDigits: 0 });
+  }
+
+  // **La seña de cada servicio viaja como dato, no como texto.**
+  //
+  // Salía de raspar el badge —«seña Gs. 140.000» sin los no-dígitos— y eso
+  // andaba de casualidad: cambiar la redacción, o un precio con decimales,
+  // daba otro número sin que nada avisara. Y no alcanzaba para decir DE
+  // DÓNDE sale el total, que es lo que se pidió: el porcentaje no estaba
+  // en ningún lado.
+  function senaDe(casilla) {
+    return parseFloat(casilla.getAttribute('data-sena')) || 0;
+  }
+
+  function reflejar() {
+    var total = 0, sena = 0, min = 0, cuantos = 0;
+
+    casillas.forEach(function (c) {
+      var tarjeta = c.closest('.sgp-srv-card');
+      // El borde de oro se pone al marcar, no al recargar.
+      if (tarjeta) { tarjeta.classList.toggle('elegida', c.checked); }
+      if (!c.checked) { return; }
+
+      // Un servicio para dos personas son dos: dos precios, dos señas, dos
+      // tiempos (7.119.0). Es la misma cuenta que hace la base fila por fila.
+      var veces = window.sgpVecesDe(c);
+      var precio = (parseFloat(c.getAttribute('data-precio')) || 0) * veces;
+      total += precio;
+      min += (parseInt(c.getAttribute('data-duracion'), 10) || 0) * veces;
+      sena += senaDe(c) * veces;
+      cuantos++;
+    });
+
+    if (!caja) { return; }
+    // **El bloque se muestra por lo que de verdad tiene adentro.** En el
+    // asistente quedó sólo con la seña —los servicios y el total los dice el
+    // repaso—, así que atarlo a «hay servicios marcados» dibujaba un recuadro
+    // vacío al pie del último paso.
+    caja.style.display = (lista || elTot)
+      ? (cuantos > 0 ? '' : 'none')
+      : (sena > 0 ? '' : 'none');
+
+    // Se arma con nodos y no con innerHTML: el nombre del servicio lo
+    // escribe el salón, y concatenarlo dentro de una cadena de HTML es
+    // la puerta por la que entra el marcado ajeno.
+    if (lista) {
+      lista.textContent = '';
+      casillas.forEach(function (c) {
+        if (!c.checked) { return; }
+        var tarjeta = c.closest('.sgp-srv-card');
+        var li = document.createElement('li');
+        var n = document.createElement('span');
+        n.textContent = tarjeta ? (tarjeta.querySelector('.sgp-srv-nombre') || {}).textContent : '';
+        var v = document.createElement('b');
+        var vecesLi = window.sgpVecesDe(c);
+        if (vecesLi > 1) { n.textContent += ' ×' + vecesLi; }
+        v.textContent = gs((parseFloat(c.getAttribute('data-precio')) || 0) * vecesLi);
+        li.appendChild(n);
+        li.appendChild(v);
+        lista.appendChild(li);
+      });
+    }
+    if (elTot) { elTot.textContent = gs(total); }
+    if (elDur) { elDur.textContent = min > 0 ? ('· ' + min + ' min') : ''; }
+    if (cajaSena) { cajaSena.style.display = sena > 0 ? '' : 'none'; }
+    if (elSena) { elSena.textContent = gs(sena); }
+
+    // **De dónde sale la seña, servicio por servicio.** Con uno solo el total
+    // se explica solo; con dos, la clienta ve una cifra que no puede
+    // comprobar. Se arma con nodos y no con innerHTML: el nombre del servicio
+    // lo escribe el salón, y concatenarlo dentro de una cadena de HTML es la
+    // puerta por la que entra el marcado ajeno.
+    if (detSena) {
+      detSena.textContent = '';
+      var conSena = 0;
+      casillas.forEach(function (c) {
+        if (!c.checked) { return; }
+        var s = senaDe(c) * window.sgpVecesDe(c);
+        if (s <= 0) { return; }
+        conSena++;
+        var pct = parseFloat(c.getAttribute('data-sena-pct')) || 0;
+        var li = document.createElement('li');
+        var n = document.createElement('span');
+        n.textContent = (c.getAttribute('data-nombre') || '')
+          + (window.sgpVecesDe(c) > 1 ? ' ×' + window.sgpVecesDe(c) : '');
+        var v = document.createElement('b');
+        v.textContent = gs(s) + (pct > 0 ? ' (' + pct + ' %)' : '');
+        li.appendChild(n);
+        li.appendChild(v);
+        detSena.appendChild(li);
+      });
+      // Con un solo servicio la lista repetiría el mismo número que el
+      // renglón de arriba: un desglose de una línea no desglosa nada.
+      detSena.style.display = conSena > 1 ? '' : 'none';
+    }
+  }
+
+  casillas.forEach(function (c) { c.addEventListener('change', reflejar); });
+  reflejar();
+})();
+
+/* ------------------------------------------------------------------
+   Registrar atención: cuánto va sumando
+
+   La pantalla mostraba el precio de cada servicio y no sumaba ninguno,
+   así que al agregar uno en el sillón no había un número que lo
+   reflejara. Con seña la cuenta es otra —lo que se cobra al final es el
+   total menos lo que la clienta ya dejó— y por eso se muestran las dos
+   cosas: si sólo se mostrara el total, agregar un servicio parecería
+   cobrar de más.
+
+   Los precios vienen en `data-precio` de cada casilla, así que no hace
+   falta volver a preguntarle al servidor. Si `app.js` no cargó, el
+   bloque igual muestra lo que el servidor calculó al dibujar.
+   ------------------------------------------------------------------ */
+(function () {
+  var caja = document.getElementById('sumaAtencion');
+  if (!caja) return;
+
+  var sena = parseFloat(caja.getAttribute('data-sena')) || 0;
+  var elTotal = caja.querySelector('[data-suma="total"]');
+  var elCobrar = caja.querySelector('[data-suma="cobrar"]');
+  var casillas = document.querySelectorAll('.srvAt');
+
+  // **Sin casillas no hay nada que sumar, y sumar cero MIENTE.** En «Ver
+  // atención» la lista pasó a ser de sólo lectura —lo que se hizo, sin
+  // casillas—, así que este bloque ponía «Gs. 0» encima del número que el
+  // servidor ya había calculado bien. El que vale ahí es el del servidor.
+  if (!casillas.length) return;
+
+  function gs(n) {
+    return 'Gs. ' + Math.round(n).toLocaleString('es-PY', { maximumFractionDigits: 0 });
+  }
+
+  function sumar() {
+    var t = 0;
+    casillas.forEach(function (c) {
+      if (c.checked) { t += parseFloat(c.getAttribute('data-precio')) || 0; }
+    });
+    if (elTotal) { elTotal.textContent = gs(t); }
+    if (elCobrar) { elCobrar.textContent = gs(Math.max(0, t - sena)); }
+  }
+
+  casillas.forEach(function (c) { c.addEventListener('change', sumar); });
+  sumar();
+})();
+
+/* ------------------------------------------------------------------
+   Ayuda contextual: los globos de `<x-ayuda>`.
+
+   Los popovers de Bootstrap son opt-in —hay que instanciarlos— así que
+   sin esto el ícono se dibuja y no abre nada. Se hace una sola vez, al
+   cargar, sobre todo lo que declare el atributo.
+
+   `trigger: focus` es lo que da el comportamiento pedido: abre al tocar
+   el ícono y **cierra al tocar afuera**, sin necesidad de volver a
+   tocarlo. Con `click` quedaría abierto hasta el segundo toque.
+
+   Si Bootstrap no cargó no se hace nada y no se rompe nada: el texto
+   sigue estando en el `title` del botón, así que el navegador lo muestra
+   al pasar el mouse. Es la regla de siempre — lo que adorna puede faltar.
+   ------------------------------------------------------------------ */
+(function () {
+  if (!window.bootstrap || !bootstrap.Popover) { return; }
+  document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
+    // El `title` está para cuando no hay Bootstrap; con Bootstrap sobra,
+    // y si se deja aparece el tooltip nativo ENCIMA del globo.
+    el.removeAttribute('title');
+    new bootstrap.Popover(el, { container: 'body' });
+  });
+})();
+
+/* ------------------------------------------------------------------
+   Quiénes vienen con la clienta.
+
+   `¿Cuántas personas van?` decía cuántas y nada más, así que el salón
+   sabía que llegaban tres y no a quiénes esperar. Al escribir el número
+   aparecen los campos de nombre y apellido de cada acompañante.
+
+   **La primera no se pide**: es la clienta que está reservando, y su
+   nombre ya lo tiene el sistema. Por eso con 1 no se dibuja nada y los
+   campos arrancan en el 2.
+
+   **Y cada una carga sus alergias** (7.113.0). Antes la cita anotaba una
+   sola —la de la ficha de quien reserva—, así que en una cita de tres,
+   dos se atendían sin que nadie supiera con qué no se las puede tocar.
+
+   Lo que ya estaba cargado se conserva: tras un rechazo el formulario
+   vuelve con los nombres puestos, y subir o bajar el número no borra los
+   que ya se habían escrito.
+
+     <input id="personas" name="personas" data-acomp="#bloqueAcomp">
+     <div id="bloqueAcomp"></div>
+   ------------------------------------------------------------------ */
+(function () {
+  'use strict';
+  document.querySelectorAll('[data-acomp]').forEach(function (campo) {
+    var caja = document.querySelector(campo.getAttribute('data-acomp'));
+    if (!caja) return;
+
+    var previos = {};
+    try { previos = JSON.parse(caja.getAttribute('data-acomp-previos') || '{}'); } catch (e) { previos = {}; }
+
+    function dibujar() {
+      var n = parseInt(campo.value, 10);
+      if (isNaN(n) || n < 2) { n = 1; }
+      if (n > 20) { n = 20; }
+
+      // Lo escrito hasta ahora no se pierde al mover el número.
+      caja.querySelectorAll('[data-acomp-orden]').forEach(function (f) {
+        var o = f.getAttribute('data-acomp-orden');
+        previos[o] = {
+          nombre: f.querySelector('[name^="acomp_nombre"]').value,
+          apellido: f.querySelector('[name^="acomp_apellido"]').value,
+          alergias: f.querySelector('[name^="acomp_alergias"]').value
+        };
+      });
+
+      caja.innerHTML = '';
+      if (n < 2) { return; }
+
+      // **El rótulo lo declara la pantalla.** «¿Quién viene con vos?» es
+      // lo que se le pregunta a la clienta; en el mostrador, quien carga la
+      // cita no es la que viene — ahí la pregunta es por la clienta elegida.
+      var rotulos = (caja.getAttribute('data-acomp-titulo') || '¿Quién viene con vos?|¿Quiénes vienen con vos?').split('|');
+      var titulo = document.createElement('div');
+      titulo.className = 'form-label';
+      titulo.textContent = n === 2 ? rotulos[0] : (rotulos[1] || rotulos[0]);
+      caja.appendChild(titulo);
+
+      for (var i = 2; i <= n; i++) {
+        var p = previos[i] || { nombre: '', apellido: '', alergias: '' };
+        var fila = document.createElement('div');
+        fila.className = 'row g-2 mb-2';
+        fila.setAttribute('data-acomp-orden', i);
+        // **Cada uno con sus alergias.** La cita anotaba una sola —la de la
+        // ficha de quien reserva— así que en una cita de tres, dos personas
+        // se atendían sin que nadie supiera con qué no se las puede tocar.
+        // El valor NO va en el `innerHTML`: lo escribe una persona, y
+        // pegado ahí unas comillas cierran el atributo.
+        // **El nombre es obligatorio** (`required` + `minlength`): el asistente
+        // valida el paso con `checkValidity()`, así que sin esto «Siguiente»
+        // dejaba pasar «3 personas» con los tres renglones en blanco — y el
+        // servidor, que descarta al que no tiene nombre, agendaba la cita con
+        // una sola. El apellido y la alergia siguen siendo opcionales.
+        fila.innerHTML =
+          '<div class="col-6"><input class="form-control form-control-sm" maxlength="60" required minlength="2"' +
+          ' name="acomp_nombre[' + i + ']" placeholder="Nombre *" value=""></div>' +
+          '<div class="col-6"><input class="form-control form-control-sm" maxlength="60"' +
+          ' name="acomp_apellido[' + i + ']" placeholder="Apellido" value=""></div>' +
+          '<div class="col-12"><input class="form-control form-control-sm" maxlength="300"' +
+          ' name="acomp_alergias[' + i + ']" placeholder="¿Es alérgica a algo? (opcional)" value=""></div>';
+        fila.querySelector('[name^="acomp_nombre"]').value = p.nombre || '';
+        fila.querySelector('[name^="acomp_apellido"]').value = p.apellido || '';
+        fila.querySelector('[name^="acomp_alergias"]').value = p.alergias || '';
+        caja.appendChild(fila);
+      }
+    }
+
+    campo.addEventListener('input', dibujar);
+    campo.addEventListener('change', dibujar);
+    dibujar();
+  });
+})();
+
+/* ------------------------------------------------------------------
+   ¿Para quién es cada servicio? — la cita de varias personas
+
+   Con tres amigas en la misma cita, «corte, mechas, manicura» no decía
+   de quién era cada cosa: no se le podía cobrar a cada una lo suyo ni
+   hacerle su propio comprobante. Ahora cada tarjeta de servicio trae un
+   «¿para quién?» (`[data-para-lista]`, ver el componente
+   `servicio-tarjeta`) y este bloque lo llena con los nombres que se
+   cargaron en el paso «Personas» — **una casilla por persona**, porque el
+   mismo servicio puede ser para varias (7.119.0): dos amigas en «Corte»
+   son dos cortes. Alguna tiene que quedar marcada: la última no se suelta.
+
+   Quién es cada número del grupo, que es la misma regla que usa el
+   servidor (`Acompanantes::nombres()`):
+
+     1     la titular — quien reserva, o `nombre_para` si la cita es para
+           otra persona. El rótulo lo declara el formulario
+           (`data-para-titular`); en Nueva cita se toma del combo de
+           clienta, que es donde se la elige.
+     2..N  cada acompañante, por el orden de sus campos de nombre.
+
+   **El bloque sólo se ve con más de una persona y con el servicio
+   marcado**: con una sola no hay nada que preguntar. Sin JavaScript
+   queda escondido y el servidor lo toma como de la titular, que es lo
+   que siempre fue.
+
+   Lo elegido se conserva al rehacer las opciones —subir el número de
+   personas o corregir un nombre no vuelve todo a la persona 1—.
+   ------------------------------------------------------------------ */
+(function () {
+  'use strict';
+  var listas = document.querySelectorAll('[data-para-lista]');
+  if (!listas.length) return;
+
+  var personas = document.getElementById('personas');
+  var form = listas[0].closest('form');
+
+  function titular() {
+    var otro = document.getElementById('paraOtro');
+    var nombrePara = document.getElementById('nombre_para');
+    if (otro && otro.checked && nombrePara && nombrePara.value.trim()) {
+      return nombrePara.value.trim();
+    }
+    var cli = document.getElementById('id_cliente');
+    if (cli && cli.value) {
+      var op = cli.options[cli.selectedIndex];
+      if (op && op.getAttribute('data-nombre')) return op.getAttribute('data-nombre');
+    }
+    return (form && form.getAttribute('data-para-titular')) || 'Persona 1';
+  }
+
+  function nombres() {
+    var n = parseInt(personas ? personas.value : '1', 10);
+    if (!(n >= 1)) n = 1;
+    if (n > 20) n = 20;
+    var lista = { 1: titular() };
+    for (var i = 2; i <= n; i++) {
+      var campo = document.querySelector('[name="acomp_nombre[' + i + ']"]');
+      var ape = document.querySelector('[name="acomp_apellido[' + i + ']"]');
+      var nom = campo ? campo.value.trim() : '';
+      if (nom && ape && ape.value.trim()) nom += ' ' + ape.value.trim();
+      lista[i] = nom || ('Persona ' + i);
+    }
+    return { n: n, lista: lista };
+  }
+
+  // Quiénes están marcadas en una lista: lo tildado, o lo que la pantalla
+  // trajo elegido (`data-elegido`, de `old()` tras un rechazo), o la 1.
+  function elegidas(lista) {
+    var v = [];
+    lista.querySelectorAll('input[type="checkbox"]:checked').forEach(function (c) {
+      v.push(parseInt(c.value, 10));
+    });
+    if (!v.length && lista.getAttribute('data-elegido')) {
+      lista.getAttribute('data-elegido').split(',').forEach(function (x) {
+        x = parseInt(x, 10);
+        if (x >= 1) v.push(x);
+      });
+    }
+    return v.length ? v : [1];
+  }
+
+  function rehacer() {
+    var datos = nombres();
+    listas.forEach(function (lista) {
+      var sid = lista.getAttribute('data-para-lista');
+      var actual = elegidas(lista);
+      lista.removeAttribute('data-elegido');
+      lista.innerHTML = '';
+      for (var i = 1; i <= datos.n; i++) {
+        var wrap = document.createElement('div');
+        wrap.className = 'form-check form-check-inline';
+        var chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.className = 'form-check-input';
+        chk.name = 'para[' + sid + '][]';
+        chk.value = String(i);
+        chk.id = 'para' + sid + '_' + i;
+        chk.setAttribute('data-para-check', '');
+        chk.checked = actual.indexOf(i) >= 0;
+        var lab = document.createElement('label');
+        lab.className = 'form-check-label';
+        lab.htmlFor = chk.id;
+        // El nombre lo escribe una persona: va como texto, nunca como HTML.
+        lab.textContent = datos.lista[i];
+        wrap.appendChild(chk);
+        wrap.appendChild(lab);
+        lista.appendChild(wrap);
+      }
+      // Alguna tiene que quedar: un servicio que no es de nadie no existe.
+      if (!lista.querySelector('input:checked')) {
+        var p1 = lista.querySelector('input');
+        if (p1) p1.checked = true;
+      }
+
+      var caja = lista.closest('.sgp-srv-para');
+      var srv = caja && document.querySelector(caja.getAttribute('data-para-de'));
+      if (caja) caja.hidden = !(datos.n > 1 && srv && srv.checked);
+    });
+  }
+
+  // Todo lo que puede cambiar quién es quién, o si hay que preguntarlo.
+  if (personas) {
+    personas.addEventListener('input', rehacer);
+    personas.addEventListener('change', rehacer);
+  }
+  document.addEventListener('input', function (ev) {
+    var n = ev.target && ev.target.name;
+    if (n && (n.indexOf('acomp_nombre[') === 0 || n.indexOf('acomp_apellido[') === 0)) rehacer();
+    if (ev.target && ev.target.id === 'nombre_para') rehacer();
+  });
+  document.addEventListener('change', function (ev) {
+    var t = ev.target;
+    if (!t) return;
+    if (t.name === 'para_otra_persona' || t.id === 'id_cliente' || (t.classList && t.classList.contains('srv'))) rehacer();
+    // La última casilla de un servicio no se suelta: sin ninguna, el
+    // servicio no sería de nadie y el servidor lo daría a la titular igual.
+    if (t.hasAttribute && t.hasAttribute('data-para-check') && !t.checked) {
+      var lista = t.closest('[data-para-lista]');
+      if (lista && !lista.querySelector('input:checked')) t.checked = true;
+    }
+  });
+
+  rehacer();
+})();
+
+/* ------------------------------------------------------------------
+   El turno, y el filtro silencioso que evita el choque de horarios.
+
+   El problema: pidiendo a alguien de la mañana para un servicio y a
+   alguien de la tarde para otro no hay ningún horario donde las dos
+   estén, y la clienta lo descubría recién al buscar día — sin saber
+   cuál de sus decisiones fallaba. Explicarlo con un aviso ayuda;
+   impedirlo es mejor.
+
+   Cómo queda el turno elegido, en este orden:
+
+     1. Lo que la clienta apretó en los botones. Manda siempre.
+     2. Si no apretó nada, el turno del PRIMER profesional que pidió —
+        que es la misma decisión tomada de otra forma.
+     3. Si no pidió a nadie, ninguno: se ofrece todo.
+
+   Con un turno activo, los combos esconden a quien no trabaja en esa
+   franja y la agenda recorta los días y las horas. Volviendo todo a
+   «quien me atienda», el filtro se suelta solo: sin nadie pedido no hay
+   turno que deducir, y no corresponde esconder nada.
+
+   **Esconder no es el control.** El servidor vuelve a comprobar turno y
+   servicio al guardar; esto es para que la clienta no pueda armar una
+   combinación que después se le rechace.
+   ------------------------------------------------------------------ */
+(function () {
+  'use strict';
+  var caja = document.querySelector('[data-turnos-caja]');
+  if (!caja) return;
+
+  var campo   = document.getElementById('idTurno');
+  var botones = caja.querySelectorAll('[data-turno]');
+  var combos  = function () { return document.querySelectorAll('[name^="prof_servicio["]'); };
+  var elegido = '0';        // lo que se apretó a mano
+  var deducido = '0';       // lo que sale del profesional pedido
+
+  function turnosDe(opcion) {
+    return String(opcion.getAttribute('data-turnos') || '').split(',').filter(Boolean);
+  }
+
+  function activo() { return elegido !== '0' ? elegido : deducido; }
+
+  // El turno del primer profesional pedido. Si trabaja en dos, no deduce
+  // nada: no hay una respuesta y adivinar escondería opciones válidas.
+  function deducir() {
+    deducido = '0';
+    Array.prototype.some.call(combos(), function (sel) {
+      if (!sel.value || sel.value === '0') return false;
+      var op = sel.options[sel.selectedIndex];
+      var t = turnosDe(op);
+      if (t.length === 1) { deducido = t[0]; return true; }
+
+      return false;
+    });
+  }
+
+  function pintar() {
+    var a = activo();
+    Array.prototype.forEach.call(botones, function (b) {
+      b.classList.toggle('activo', b.getAttribute('data-turno') === a);
+    });
+  }
+
+  function filtrar() {
+    var a = activo();
+    Array.prototype.forEach.call(combos(), function (sel) {
+      Array.prototype.forEach.call(sel.options, function (op) {
+        if (!op.value || op.value === '0') { op.hidden = false; return; }
+        var t = turnosDe(op);
+        // Sin turnos cargados no se esconde: es el criterio permisivo de
+        // siempre — quien no tiene nada cargado no queda fuera por eso.
+        op.hidden = (a !== '0' && t.length > 0 && t.indexOf(a) === -1);
+      });
+      // Si lo que estaba elegido quedó escondido, se suelta: dejarlo
+      // seleccionado mandaría al servidor justo lo que se quiso evitar.
+      if (sel.selectedIndex >= 0 && sel.options[sel.selectedIndex].hidden) {
+        sel.value = '0';
+      }
+    });
+  }
+
+  function refrescar(volverAPedir) {
+    deducir();
+    if (campo) { campo.value = activo(); }
+    pintar();
+    filtrar();
+    // La agenda depende del turno, así que se vuelve a pedir. El selector
+    // escucha los combos por su cuenta; acá se fuerza cuando cambió el
+    // turno sin que ningún combo se haya tocado.
+    if (volverAPedir) {
+      var srv = document.querySelector('.srv:checked');
+      if (srv) { srv.dispatchEvent(new Event('change')); }
+    }
+  }
+
+  Array.prototype.forEach.call(botones, function (b) {
+    b.addEventListener('click', function () {
+      elegido = b.getAttribute('data-turno');
+      refrescar(true);
+    });
+  });
+
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.name && e.target.name.indexOf('prof_servicio[') === 0) {
+      refrescar(false);
+    }
+  });
+
+  refrescar(false);
+})();
+
+/* ------------------------------------------------------------------
+   Lo que cambió mientras mirabas
+
+   El sistema navega a la vieja usanza: cada pantalla es una foto del
+   momento en que se pidió. En un salón eso se nota — dos personas
+   sobre la misma agenda, una registra la atención y la otra sigue
+   viendo la cita como Programada hasta que se le ocurre recargar; o el
+   cajón que abrió el otro mostrador, sin el cual no se puede cobrar.
+
+   Se activa con `data-vivo="agenda"` en el `<body>`. Cada veinte
+   segundos le pide al servidor la huella de esa sección y la compara
+   con la que se llevó al dibujarse.
+
+   Cuatro decisiones que NO son adorno:
+
+   · **No recarga encima de lo que estás escribiendo.** Si hay un modal
+     abierto o un campo tocado, se muestra el aviso y la persona decide.
+     Recargar sobre un formulario a medias es la peor forma de «tiempo
+     real», y es la queja que este proyecto ya arregló dos veces con el
+     borrador de las altas rápidas.
+   · **No consulta con la pestaña en segundo plano.** No tiene sentido
+     gastarle los datos del celular a una pantalla que nadie mira; al
+     volver, pregunta enseguida.
+   · **Un error no hace nada.** Si el servidor no contesta, la pantalla
+     sigue como está: esto es un aviso, no parte del funcionamiento.
+   · **Es un adorno que puede faltar.** Sin `app.js` todo anda igual,
+     sólo que hay que recargar a mano, que es como estaba antes.
+   ------------------------------------------------------------------ */
+(function () {
+  var seccion = document.body.getAttribute('data-vivo');
+  if (!seccion || !window.fetch) { return; }
+
+  var url = document.body.getAttribute('data-vivo-url');
+  if (!url) { return; }
+
+  var huella = null;
+  var cada = 20000;
+  var timer = null;
+  var avisado = false;
+
+  // ¿Hay algo que perder si recargamos? Un modal abierto o un campo que
+  // la persona tocó. `data-sgp-tocado` lo pone el primer `input`.
+  function hayAlgoQuePerder() {
+    if (document.querySelector('.modal.show')) { return true; }
+    if (document.querySelector('[data-sgp-tocado]')) { return true; }
+
+    return false;
+  }
+
+  function avisar() {
+    if (avisado) { return; }
+    avisado = true;
+
+    var barra = document.createElement('div');
+    barra.className = 'sgp-vivo';
+    barra.setAttribute('role', 'status');
+
+    var txt = document.createElement('span');
+    txt.textContent = 'Hay cambios nuevos en esta pantalla.';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-acento';
+    btn.textContent = 'Actualizar';
+    btn.addEventListener('click', function () { location.reload(); });
+
+    barra.appendChild(txt);
+    barra.appendChild(btn);
+    document.body.appendChild(barra);
+  }
+
+  function mirar() {
+    if (document.hidden) { return; }
+
+    fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) { return; }
+        if (d.cada) { cada = d.cada * 1000; }
+        if (huella === null) { huella = d.v; return; }
+        if (d.v === huella) { return; }
+
+        // Cambió. Si no hay nada que perder, se recarga sola —que es lo
+        // que se pidió—; si la persona está en el medio de algo, se le
+        // avisa y decide ella.
+        if (hayAlgoQuePerder()) { avisar(); return; }
+        clearInterval(timer);
+        location.reload();
+      })
+      .catch(function () { /* sin conexión: la pantalla sigue como está */ });
+  }
+
+  // El primer campo tocado marca la página como «no la pises».
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t && t.form) { t.setAttribute('data-sgp-tocado', '1'); }
+  }, true);
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { mirar(); }
+  });
+
+  mirar();
+  timer = setInterval(mirar, cada);
+})();
+
+/* ------------------------------------------------------------------
+   El asistente de reserva: una decisión por pantalla
+   ------------------------------------------------------------------
+   Reservar pedía CINCO cosas en una sola página —local, servicios, quién
+   atiende cada uno, día, hora y los detalles— y en el celular eso son
+   varias pantallas de scroll donde no se ve dónde se está ni cuánto
+   falta. Peor: el botón de reservar vivía al final, así que la única
+   forma de saber si faltaba algo era llegar abajo y encontrarlo
+   deshabilitado, sin decir por qué.
+
+   Ahora es un paso por vez, con la barra de arriba diciendo en cuál se
+   está, y **el último paso muestra la cita armada antes de confirmarla**
+   — que es lo que nadie podía ver: qué servicios, con quién, a qué hora
+   y cuánto sale, todo junto.
+
+   TRES COSAS QUE NO HAY QUE ROMPER AL TOCARLO:
+
+   1) **Sin `app.js` se ven TODOS los pasos y se reserva igual.** El CSS
+      esconde sólo bajo `.sgp-wiz-on`, y esa clase la pone este script.
+      Es la regla de siempre: lo que adorna puede faltar.
+
+   2) **`required` se saca del paso escondido.** Un campo obligatorio
+      dentro de un `display:none` hace que el navegador **se niegue a
+      enviar el formulario y no diga nada** — es el defecto de la 7.67.0,
+      que dejó «crear usuario» sin funcionar hasta que alguien miró la
+      consola. Acá el riesgo es peor, porque el envío ocurre en el último
+      paso, con todos los demás escondidos.
+
+   3) **Cambiar de paso no navega.** Es la misma página: si esto
+      empezara a recargar, se perdería lo cargado y volveríamos al
+      problema que `data-borrador` ya resolvió una vez.
+   ------------------------------------------------------------------ */
+(function () {
+  var cajas = document.querySelectorAll('[data-asistente]');
+  if (!cajas.length) return;
+
+  function icono(nombre) {
+    var i = document.createElement('i');
+    i.className = 'bi bi-' + (nombre || 'circle');
+    return i;
+  }
+
+  cajas.forEach(function (caja) {
+    var pasos = Array.prototype.filter.call(caja.children, function (el) {
+      return el.hasAttribute('data-paso');
+    });
+    if (pasos.length < 2) return;
+
+    caja.classList.add('sgp-wiz-on');
+    var actual = 0;
+
+    // ---- La barra de pasos ----
+    var barra = document.createElement('ol');
+    barra.className = 'sgp-wiz-barra';
+    pasos.forEach(function (p, i) {
+      var li = document.createElement('li');
+      li.className = 'sgp-wiz-item';
+      var bola = document.createElement('span');
+      bola.className = 'sgp-wiz-bola';
+      bola.textContent = String(i + 1);
+      var tit = document.createElement('span');
+      tit.className = 'sgp-wiz-tit';
+      tit.textContent = p.getAttribute('data-paso') || ('Paso ' + (i + 1));
+      li.appendChild(bola);
+      li.appendChild(tit);
+      // Volver a un paso ya recorrido: hacia adelante no, que saltearía
+      // lo que ese paso pide.
+      li.addEventListener('click', function () { if (i < actual) ir(i); });
+      barra.appendChild(li);
+    });
+    caja.insertBefore(barra, caja.firstChild);
+
+    // ---- La botonera de cada paso ----
+    pasos.forEach(function (p, i) {
+      var nav = document.createElement('div');
+      nav.className = 'sgp-wiz-nav';
+
+      if (i > 0) {
+        var atras = document.createElement('button');
+        atras.type = 'button';
+        atras.className = 'btn btn-outline-neutro';
+        atras.appendChild(icono('arrow-left'));
+        atras.appendChild(document.createTextNode(' Volver'));
+        atras.addEventListener('click', function () { ir(i - 1); });
+        nav.appendChild(atras);
+      }
+
+      if (i < pasos.length - 1) {
+        var sig = document.createElement('button');
+        sig.type = 'button';
+        sig.className = 'btn btn-acento ms-auto';
+        sig.appendChild(document.createTextNode('Siguiente '));
+        sig.appendChild(icono('arrow-right'));
+        sig.addEventListener('click', function () { if (valida(p)) ir(i + 1); });
+        nav.appendChild(sig);
+      }
+
+      // «Cancelar» va con los demás botones, no suelto arriba: si se queda
+      // en el cuerpo del paso, queda un enlace huérfano entre el repaso y
+      // la botonera y se lee como parte del contenido.
+      var salir = p.querySelector('[data-wiz-cancelar]');
+      if (salir) { nav.appendChild(salir); }
+
+      // El último paso ya trae el botón de confirmar del formulario: se
+      // lo empuja a la derecha para que quede donde estaba «Siguiente».
+      var propio = p.querySelector('[data-wiz-confirmar]');
+      if (propio) { propio.classList.add('ms-auto'); nav.appendChild(propio); }
+
+      p.appendChild(nav);
+    });
+
+    /* **La validación del paso, antes de dejar avanzar.**
+       Se usa la del navegador —`reportValidity` muestra el globo nativo
+       sobre el campo— y encima una propia para lo que no es un campo:
+       elegir servicios son casillas, y el horario lo escribe el selector
+       de disponibilidad en un `input` escondido. */
+    function valida(p) {
+      var campos = p.querySelectorAll('input:not([type=hidden]), select, textarea');
+      for (var i = 0; i < campos.length; i++) {
+        if (!campos[i].checkValidity()) { campos[i].reportValidity(); return false; }
+      }
+
+      var pide = p.getAttribute('data-paso-requiere');
+      if (pide) {
+        var falta = false;
+        if (pide.charAt(0) === '#' || pide.charAt(0) === '.') {
+          var el = document.querySelector(pide);
+          falta = !el || !String(el.value || '').trim();
+        } else if (pide === 'servicios') {
+          falta = !document.querySelector('.srv:checked');
+        }
+        if (falta) { aviso(p, p.getAttribute('data-paso-error') || 'Falta completar este paso.'); return false; }
+      }
+      return true;
+    }
+
+    function aviso(p, texto) {
+      var caja2 = p.querySelector('[data-wiz-aviso]');
+      if (!caja2) {
+        caja2 = document.createElement('div');
+        caja2.className = 'alert alert-warning py-2 mt-2';
+        caja2.setAttribute('data-wiz-aviso', '');
+        p.insertBefore(caja2, p.querySelector('.sgp-wiz-nav'));
+      }
+      caja2.textContent = texto;
+      caja2.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    /* **`required` se saca de lo escondido y se devuelve al mostrarlo.**
+       Ver el aviso 2 de arriba: sin esto el formulario no se envía y no
+       hay ningún mensaje que lo explique. */
+    function trabar(p, escondido) {
+      p.querySelectorAll('[required], [data-wiz-req]').forEach(function (c) {
+        if (escondido) {
+          if (c.hasAttribute('required')) { c.setAttribute('data-wiz-req', '1'); c.removeAttribute('required'); }
+        } else if (c.hasAttribute('data-wiz-req')) {
+          c.removeAttribute('data-wiz-req'); c.setAttribute('required', 'required');
+        }
+      });
+    }
+
+    /**
+     * `inicial` es la primera pintada, y ahí NO se scrollea.
+     *
+     * **Ése era el «retrocede» que se reportó.** Cuando el servidor rechaza la
+     * reserva, la respuesta es esta misma pantalla con el aviso arriba y todo
+     * lo cargado de vuelta por `old()`. El asistente arrancaba en el paso 1 y
+     * encima se traía la vista hacia sí mismo, así que el aviso que explica el
+     * rechazo quedaba fuera de pantalla: desde el dedo, apretar «Confirmar»
+     * devolvía al principio sin decir una palabra.
+     */
+    function ir(i, inicial) {
+      actual = i;
+      pasos.forEach(function (p, k) {
+        var activo = k === i;
+        p.classList.toggle('sgp-wiz-activo', activo);
+        trabar(p, !activo);
+      });
+      barra.querySelectorAll('.sgp-wiz-item').forEach(function (li, k) {
+        li.classList.toggle('hecho', k < i);
+        li.classList.toggle('activo', k === i);
+      });
+      // **Cada paso se arma al ENTRAR, no antes.** El de profesionales
+      // sólo puede saber qué servicios hay cuando ya se eligieron, y el
+      // repaso sólo tiene sentido cuando ya no queda nada por cambiar.
+      document.dispatchEvent(new CustomEvent('sgp:asistente-paso', {
+        detail: { caja: caja, paso: pasos[i], indice: i, ultimo: i === pasos.length - 1, pasos: pasos },
+      }));
+      if (!inicial) { caja.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+    }
+
+    /* **Dónde abre.** Normalmente en el primero; después de un rechazo, en el
+       paso que la pantalla indique —el último, con todo lo cargado de vuelta—
+       para no hacer recorrer de nuevo cinco pasos que ya estaban contestados. */
+    var arranque = parseInt(caja.getAttribute('data-asistente-inicio'), 10);
+    if (!(arranque >= 0)) { arranque = 0; }
+    // Se acota al último que exista: la vista manda un número alto —no sabe
+    // cuántos pasos dibujó— y así agregar o sacar uno no obliga a tocarla.
+    if (arranque >= pasos.length) { arranque = pasos.length - 1; }
+    ir(arranque, true);
+  });
+})();
+
+
+/* ------------------------------------------------------------------
+   Paso «Profesionales»: quién hace cada servicio, uno debajo del otro
+   ------------------------------------------------------------------
+   El combo de profesional vive **dentro de la tarjeta del servicio**
+   desde la 7.51.0, y ahí está bien: aparece con su servicio y no hay
+   quince combos colgando de servicios que nadie pidió. Lo que este paso
+   agrega es mirarlos juntos, que es otra pregunta —«¿con quién me
+   atiendo?»— y en el celular obligaba a subir y bajar entre tarjetas.
+
+   **Se MUEVE el nodo, no se copia.** Dos combos con el mismo `name`
+   mandarían dos valores para el mismo servicio y ganaría el último, que
+   es justo el defecto que este proyecto ya se hizo copiando formularios.
+   Al salir del paso vuelve a su tarjeta.
+   ------------------------------------------------------------------ */
+document.addEventListener('sgp:asistente-paso', function (e) {
+  var paso = e.detail.paso;
+  var caja = e.detail.caja;
+  var destino = caja.querySelector('[data-paso-profesionales]');
+  if (!destino) return;
+
+  function devolver() {
+    destino.querySelectorAll('.sgp-srv-extra').forEach(function (ex) {
+      var card = document.querySelector('[data-srv-card="' + ex.getAttribute('data-de-card') + '"]');
+      if (card) { card.appendChild(ex); }
+    });
+    destino.textContent = '';
+  }
+
+  // El contenedor vive DENTRO del paso, no es el paso: comparar los dos
+  // nodos daba siempre distinto y la lista no se armaba nunca.
+  if (!paso.contains(destino)) { devolver(); return; }
+
+  devolver();
+  var hay = 0;
+  document.querySelectorAll('.srv:checked').forEach(function (c) {
+    var card = c.closest('.sgp-srv-card');
+    var ex = card && card.querySelector('.sgp-srv-extra');
+    if (!card || !ex) { return; }
+
+    ex.setAttribute('data-de-card', card.getAttribute('data-srv-card'));
+
+    var fila = document.createElement('div');
+    fila.className = 'sgp-wiz-linea';
+
+    var ic = document.createElement('div');
+    ic.className = 'sgp-wiz-linea-ic';
+    ic.innerHTML = '<i class="bi bi-scissors"></i>';
+
+    var cuerpo = document.createElement('div');
+    cuerpo.className = 'sgp-wiz-linea-cuerpo';
+    var nom = document.createElement('div');
+    nom.className = 'sgp-wiz-linea-nom';
+    nom.textContent = (card.querySelector('.sgp-srv-nombre') || {}).textContent || '';
+    var dur = document.createElement('div');
+    dur.className = 'sgp-wiz-linea-quien';
+    dur.textContent = (c.getAttribute('data-duracion') || '') + ' min';
+    cuerpo.appendChild(nom);
+    cuerpo.appendChild(dur);
+    cuerpo.appendChild(ex);
+
+    fila.appendChild(ic);
+    fila.appendChild(cuerpo);
+    destino.appendChild(fila);
+    hay++;
+  });
+
+  if (!hay) {
+    var v = document.createElement('div');
+    v.className = 'text-muted-warm';
+    v.textContent = 'Volvé al paso anterior y elegí al menos un servicio.';
+    destino.appendChild(v);
+  }
+});
+
+/* ------------------------------------------------------------------
+   Paso final: «tu cita quedaría así»
+   ------------------------------------------------------------------
+   Lo que faltaba antes de confirmar: **la cita armada**. La pantalla
+   pedía cinco cosas y la última decisión se tomaba sin poder ver las
+   cuatro anteriores juntas — qué servicios, con quién, qué día y a qué
+   hora, y cuánto sale todo.
+
+   Se arma con los `data-` que las tarjetas ya traen y con el valor que
+   el selector de disponibilidad dejó en el campo escondido: **no se le
+   pregunta nada al servidor**, así que no puede quedar desfasado de lo
+   que la clienta está viendo.
+   ------------------------------------------------------------------ */
+document.addEventListener('sgp:asistente-paso', function (e) {
+  if (!e.detail.ultimo) return;
+  var destino = e.detail.caja.querySelector('[data-wiz-repaso]');
+  if (!destino) return;
+
+  function gs(n) {
+    return 'Gs. ' + Math.round(n).toLocaleString('es-PY', { maximumFractionDigits: 0 });
+  }
+  function txt(el, clase, contenido) {
+    var d = document.createElement(el);
+    if (clase) { d.className = clase; }
+    d.textContent = contenido;
+    return d;
+  }
+
+  destino.textContent = '';
+  var caja = document.createElement('div');
+  caja.className = 'sgp-wiz-repaso';
+
+  // --- El día y la hora, arriba ---
+  var campo = document.getElementById('fecha_hora');
+  var cuando = campo && String(campo.value || '').trim();
+  var dia = document.createElement('div');
+  dia.className = 'sgp-wiz-repaso-dia';
+  dia.innerHTML = '<i class="bi bi-calendar-event"></i>';
+  dia.appendChild(txt('span', '', cuando
+    ? new Date(cuando.replace(' ', 'T')).toLocaleString('es-PY', {
+        weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : 'Todavía no elegiste el horario'));
+  caja.appendChild(dia);
+
+  // --- Un renglón por servicio, con quién lo hace ---
+  //
+  // **Lo que el selector de horario ya decidió, manda.** A esa hora el
+  // servidor dijo cuánto dura y quién atiende cada cosa (`sgpEleccion`), así
+  // que «con quien esté disponible» pasa a tener nombre y la duración deja de
+  // ser la suma —que es el peor caso— para ser la de verdad.
+  var eleccion = null;
+  try {
+    var ag = document.querySelector('[data-agenda]');
+    eleccion = ag && ag.dataset.sgpEleccion ? JSON.parse(ag.dataset.sgpEleccion) : null;
+  } catch (e) { eleccion = null; }
+
+  var total = 0, min = 0, cuantos = 0;
+  document.querySelectorAll('.srv:checked').forEach(function (c) {
+    var card = c.closest('.sgp-srv-card');
+    // Para dos personas son dos: el renglón lo dice («×2») y cuenta doble.
+    var veces = window.sgpVecesDe(c);
+    var precio = (parseFloat(c.getAttribute('data-precio')) || 0) * veces;
+    total += precio;
+    min += (parseInt(c.getAttribute('data-duracion'), 10) || 0) * veces;
+    cuantos++;
+
+    var fila = document.createElement('div');
+    fila.className = 'sgp-wiz-linea';
+    var ic = document.createElement('div');
+    ic.className = 'sgp-wiz-linea-ic';
+    ic.innerHTML = '<i class="bi bi-scissors"></i>';
+
+    var cuerpo = document.createElement('div');
+    cuerpo.className = 'sgp-wiz-linea-cuerpo';
+    cuerpo.appendChild(txt('div', 'sgp-wiz-linea-nom',
+      (card ? ((card.querySelector('.sgp-srv-nombre') || {}).textContent || '') : '')
+      + (veces > 1 ? ' ×' + veces : '')));
+
+    // Quién lo hace sale del combo de esa tarjeta; el combo puede estar
+    // movido al paso de profesionales, así que se lo busca por `name`.
+    var sel = document.querySelector('select[name$="[' + c.value + ']"]')
+           || (card && card.querySelector('select'));
+    // **«Sin preferencia» se dice en el repaso como lo que significa.** El
+    // texto de la opción está escrito para elegir —«quien me atienda»— y en
+    // un repaso se lee como si ésa fuera la profesional asignada.
+    var elegido = sel && sel.value && sel.value !== '0';
+    var quien = elegido && sel.options[sel.selectedIndex]
+      ? sel.options[sel.selectedIndex].textContent.trim().split('·')[0].trim() : '';
+    var asignada = !quien && eleccion && eleccion.nombres && eleccion.nombres[c.value];
+    cuerpo.appendChild(txt('div', 'sgp-wiz-linea-quien',
+      quien ? quien : (asignada ? 'con ' + asignada + ' (asignada para ese horario)' : 'con quien esté disponible')));
+
+    // **Para quiénes es, cuando la cita es de varias.** Con una sola persona
+    // la lista tiene una casilla y no se dice nada: sería repetir el nombre
+    // de quien reserva en cada renglón. Con varias marcadas se nombran todas
+    // —«para Ana y Josefina»—, que es lo que hace ver que son dos cortes.
+    var paraLista = document.querySelector('[data-para-lista="' + c.value + '"]');
+    if (paraLista && paraLista.querySelectorAll('input').length > 1) {
+      var nombresPara = [];
+      paraLista.querySelectorAll('input:checked').forEach(function (ch) {
+        var lb = paraLista.querySelector('label[for="' + ch.id + '"]');
+        nombresPara.push(lb ? lb.textContent.trim() : ('la persona ' + ch.value));
+      });
+      if (nombresPara.length) {
+        var ultimo = nombresPara.pop();
+        cuerpo.appendChild(txt('div', 'sgp-wiz-linea-quien',
+          'para ' + (nombresPara.length ? nombresPara.join(', ') + ' y ' + ultimo : ultimo)
+          + (nombresPara.length ? ' (' + (nombresPara.length + 1) + ' veces)' : '')));
+      }
+    }
+
+    fila.appendChild(ic);
+    fila.appendChild(cuerpo);
+    fila.appendChild(txt('div', 'sgp-wiz-linea-val', gs(precio)));
+    caja.appendChild(fila);
+  });
+
+  if (!cuantos) {
+    caja.appendChild(txt('div', 'sgp-wiz-linea', 'Todavía no elegiste ningún servicio.'));
+  }
+  destino.appendChild(caja);
+
+  // --- Duración y total, como en la maqueta ---
+  var cifras = document.createElement('div');
+  cifras.className = 'sgp-wiz-cifras';
+
+  if (eleccion && eleccion.duracion) { min = parseInt(eleccion.duracion, 10) || min; }
+  var c1 = document.createElement('div');
+  c1.className = 'sgp-wiz-cifra';
+  c1.appendChild(txt('span', 'r', 'Duración total'));
+  c1.appendChild(txt('span', 'v', min >= 60
+    ? (Math.floor(min / 60) + ' h ' + (min % 60 ? (min % 60) + ' min' : '')).trim()
+    : min + ' min'));
+
+  var c2 = document.createElement('div');
+  c2.className = 'sgp-wiz-cifra';
+  c2.appendChild(txt('span', 'r', 'Total'));
+  c2.appendChild(txt('span', 'v', gs(total)));
+
+  cifras.appendChild(c1);
+  cifras.appendChild(c2);
+  destino.appendChild(cifras);
+});
+
+/* «¿De qué cuenta sale?» y «¿a qué caja entra?» los acomoda el bloque
+   «Dónde cae la plata», más arriba: un solo lugar para el cobro, la seña,
+   los pagos y el movimiento manual (7.121.0). */
+
+// ---------------------------------------------------------------------
+//  Tarjetas móviles: el botón que muestra las columnas secundarias.
+//
+//  Una tabla con siete columnas no entra en un celular, así que las que
+//  aportan menos —el medio de pago, la flexibilidad de entrada— van con
+//  `.sgp-movil-oculto` y aparecen con este botón.
+//
+//  **Se llama «Más», no «Detalles».** En la agenda, al lado de «Detalle»
+//  —el botón que abre la atención— quedaban dos botones con casi la misma
+//  palabra para dos cosas distintas, y se reportó como ambiguo. «Más»
+//  dice lo que hace: hay más datos de esta misma fila.
+// ---------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', function () {
+  if (window.innerWidth > 576) return;   // sólo importa en el celular
+
+  document.querySelectorAll('.sgp-tabla-movil tbody tr').forEach(function (tr) {
+    if (!tr.querySelectorAll('.sgp-movil-oculto').length) return;
+
+    var celda = tr.querySelector('.sgp-movil-acciones');
+    if (!celda) {
+      celda = document.createElement('td');
+      celda.className = 'sgp-movil-acciones';
+      tr.appendChild(celda);
+    }
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-outline-neutro sgp-btn-detalles';
+    btn.setAttribute('aria-expanded', 'false');
+    var ic = document.createElement('i');
+    ic.className = 'bi bi-chevron-down';
+    ic.style.transition = 'transform .2s';
+    ic.style.display = 'inline-block';
+    btn.appendChild(ic);
+    btn.appendChild(document.createTextNode(' Más'));
+
+    btn.addEventListener('click', function () {
+      var abierto = tr.classList.toggle('sgp-movil-expandido');
+      ic.style.transform = abierto ? 'rotate(180deg)' : 'rotate(0deg)';
+      btn.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+    });
+
+    celda.insertBefore(btn, celda.firstChild);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Ajustes del sistema — Configuración → Ajustes
+//
+// El salón elige UN color y el resto se ajusta solo. Acá vive lo que hace
+// falta para que eso se vea ANTES de guardar: la vista previa —con su
+// color, su tamaño y su tipo de letra— y el elegidor plegable con su
+// buscador.
+//
+// **La tabla de derivación no está escrita acá.** Viaja desde PHP en
+// `data-ap-reglas`, y los valores exactos del verde agua en
+// `data-ap-identidad`: lo único que se repite son las quince líneas de
+// conversión HSL, que son matemática y no criterio. Lo mismo los tamaños
+// (`data-ap-letras`) y las pilas de fuentes (`data-ap-fuentes`). Lo que se
+// GUARDA lo calcula siempre `App\Servicios\Tema`, así que un desfase de
+// acá no puede dejar una paleta rara en la base — como mucho, una previa
+// mentirosa.
+//
+// Y todo esto es un ADORNO que puede faltar: sin `app.js` el elegidor se
+// ve entero, las paletas son etiquetas de radio, el color propio es un
+// `input type=color` y la letra son dos juegos de radios. Se elige y se
+// guarda igual.
+// ---------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', function () {
+  var form = document.querySelector('[data-ap]');
+  if (!form) return;
+
+  var leerJson = function (attr, porDefecto) {
+    try { return JSON.parse(form.getAttribute(attr) || ''); } catch (e) { return porDefecto; }
+  };
+  var REGLAS = leerJson('data-ap-reglas', {});
+  var CATALOGO = leerJson('data-ap-catalogo', {});
+  var MAPA = leerJson('data-ap-previa-mapa', {});
+  var IDENTIDAD = leerJson('data-ap-identidad', {});
+  var BASE = (form.getAttribute('data-ap-primario-base') || '#1A6B5F').toUpperCase();
+  var LETRAS = leerJson('data-ap-letras', {});
+  var FUENTES = leerJson('data-ap-fuentes', {});
+  // El tamaño que ya está puesto escala la página entera, previa incluida:
+  // la previa mide el ELEGIDO dividido por éste, así muestra el tamaño real.
+  var LETRA_BASE = parseFloat(form.getAttribute('data-ap-letra-base')) || 100;
+  var POR_PAGINA = 6;
+
+  // --- Color: el espejo de `App\Servicios\Tema` -----------------------
+  function canales(hex) {
+    return [1, 3, 5].map(function (i) { return parseInt(hex.slice(i, i + 2), 16) / 255; });
+  }
+  function hsl(hex) {
+    var c = canales(hex), r = c[0], g = c[1], b = c[2];
+    var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min, l = (max + min) / 2;
+    var h = 0, s = 0;
+    if (d) {
+      s = d / (1 - Math.abs(2 * l - 1));
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+    }
+    return [h, s, l];
+  }
+  function deHsl(h, s, l) {
+    var a = s * Math.min(l, 1 - l);
+    var f = function (n) {
+      var k = (n + h / 30) % 12;
+      var v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      return Math.round(v * 255).toString(16).padStart(2, '0');
+    };
+    return ('#' + f(0) + f(8) + f(4)).toUpperCase();
+  }
+  function lum(hex) {
+    return canales(hex).map(function (v) {
+      return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    }).reduce(function (t, v, i) { return t + v * [0.2126, 0.7152, 0.0722][i]; }, 0);
+  }
+  function contraste(a, b) {
+    var x = lum(a), y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+  function esColor(v) { return /^#[0-9a-fA-F]{6}$/.test(v || ''); }
+
+  function paleta(primario) {
+    primario = (primario || '').toUpperCase();
+    if (!esColor(primario)) primario = BASE;
+    if (primario === BASE) return Object.assign({}, IDENTIDAD);
+
+    var p = hsl(primario), tk = {}, k;
+    for (k in REGLAS) {
+      var r = REGLAS[k];
+      if (r === 'primario') { tk[k] = primario; continue; }
+      if (typeof r === 'string') continue;
+      tk[k] = deHsl(p[0], Math.min(p[1], r[0]), r[1]);
+    }
+    for (k in REGLAS) {
+      if (typeof REGLAS[k] === 'string' && REGLAS[k].indexOf('sobre:') === 0) {
+        var fondo = tk[REGLAS[k].slice(6)] || primario;
+        var osc = tk.fondo_oscuro || '#0B1F1C';
+        tk[k] = contraste('#FFFFFF', fondo) >= contraste(osc, fondo) ? '#FFFFFF' : osc;
+      }
+    }
+    return tk;
+  }
+
+  // --- Lo que está elegido ahora --------------------------------------
+  var propio = form.querySelector('[data-ap-propio]');
+  var propioRadio = form.querySelector('[data-ap-propio-radio]');
+  var previa = form.querySelector('[data-ap-previa]');
+  var modo = 'claro';
+
+  function primarioElegido() {
+    var marcada = form.querySelector('input[name="paleta"]:checked');
+    if (marcada && marcada.value && CATALOGO[marcada.value]) return CATALOGO[marcada.value];
+    return propio ? propio.value : BASE;
+  }
+
+  function pintar() {
+    var tk = paleta(primarioElegido());
+
+    // La previa, con el mapa que mandó el servidor.
+    if (previa) {
+      Object.keys(MAPA).forEach(function (v) {
+        previa.style.setProperty(v, tk[MAPA[v][modo === 'oscuro' ? 1 : 0]] || '#000000');
+      });
+      var letra = form.querySelector('[data-ap-letra]:checked');
+      var pct = letra && LETRAS[letra.value] ? LETRAS[letra.value] : LETRA_BASE;
+      previa.style.setProperty('--pv-letra', (pct / LETRA_BASE) + 'rem');
+      var fuente = form.querySelector('[data-ap-fuente]:checked');
+      var pila = fuente ? FUENTES[fuente.value] : '';
+      previa.style.setProperty('--pv-fuente', pila || 'inherit');
+    }
+
+    // Las tres muestras y el nombre del renglón de arriba.
+    var muestras = form.querySelector('[data-ap-muestras]');
+    if (muestras) {
+      ['superficie', 'borde', 'acento'].forEach(function (k, i) {
+        if (muestras.children[i]) muestras.children[i].style.background = tk[k];
+      });
+    }
+    var nom = form.querySelector('[data-ap-nombre]');
+    if (nom) {
+      var m = form.querySelector('input[name="paleta"]:checked');
+      var eti = m && m.value ? m.closest('[data-ap-opcion]') : null;
+      var texto = eti ? eti.querySelector('.sgp-ap-paleta-nom') : null;
+      nom.textContent = texto ? texto.textContent.replace('✓', '').trim() : 'Color propio';
+    }
+  }
+
+  // --- El elegidor: plegado, buscador y páginas ------------------------
+  var picker = document.getElementById('apPicker');
+  var cambiar = form.querySelector('[data-ap-cambiar]');
+  var buscar = form.querySelector('[data-ap-buscar]');
+  var rotulo = form.querySelector('[data-ap-buscar-rot]');
+  var opciones = Array.prototype.slice.call(form.querySelectorAll('[data-ap-opcion]'));
+  var vacio = form.querySelector('[data-ap-vacio]');
+  var pag = form.querySelector('[data-ap-pag]');
+  var pagina = 0;
+
+  var sinTildes = function (s) {
+    return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  };
+
+  function repartir() {
+    var q = sinTildes(buscar ? buscar.value : '');
+    var caben = opciones.filter(function (o) {
+      return sinTildes(o.getAttribute('data-ap-busca')).indexOf(q) !== -1;
+    });
+    var paginas = Math.max(1, Math.ceil(caben.length / POR_PAGINA));
+    if (pagina > paginas - 1) pagina = paginas - 1;
+
+    opciones.forEach(function (o) { o.hidden = true; });
+    caben.slice(pagina * POR_PAGINA, pagina * POR_PAGINA + POR_PAGINA)
+      .forEach(function (o) { o.hidden = false; });
+
+    if (vacio) vacio.hidden = caben.length > 0;
+    if (pag) {
+      pag.hidden = caben.length <= POR_PAGINA;
+      var cuenta = pag.querySelector('[data-ap-pagina]');
+      if (cuenta) cuenta.textContent = (pagina + 1) + ' de ' + paginas;
+      var antes = pag.querySelector('[data-ap-antes]');
+      var luego = pag.querySelector('[data-ap-luego]');
+      if (antes) antes.disabled = pagina === 0;
+      if (luego) luego.disabled = pagina >= paginas - 1;
+    }
+  }
+
+  // Con JavaScript el elegidor se pliega y aparecen el botón y el buscador.
+  if (picker && cambiar) {
+    picker.hidden = true;
+    cambiar.hidden = false;
+    cambiar.setAttribute('aria-expanded', 'false');
+    cambiar.addEventListener('click', function () {
+      picker.hidden = !picker.hidden;
+      cambiar.setAttribute('aria-expanded', picker.hidden ? 'false' : 'true');
+      if (!picker.hidden) {
+        repartir();
+        if (buscar) buscar.focus();
+      }
+    });
+  }
+  if (buscar) {
+    buscar.hidden = false;
+    if (rotulo) rotulo.hidden = false;
+    buscar.addEventListener('input', function () { pagina = 0; repartir(); });
+  }
+  var irA = function (d) { return function () { pagina += d; repartir(); }; };
+  var bAntes = form.querySelector('[data-ap-antes]');
+  var bLuego = form.querySelector('[data-ap-luego]');
+  if (bAntes) bAntes.addEventListener('click', irA(-1));
+  if (bLuego) bLuego.addEventListener('click', irA(1));
+  repartir();
+
+  // --- Lo que dispara un repintado ------------------------------------
+  form.addEventListener('change', function (e) {
+    var t = e.target;
+    if (!t.name) return;
+    // Elegir una paleta deja su color en el selector propio: al pasar a
+    // «color del salón» se arranca desde el que se estaba mirando y no
+    // desde uno de hace tres cambios.
+    if (t.name === 'paleta' && t.value && CATALOGO[t.value] && propio) {
+      propio.value = CATALOGO[t.value];
+    }
+    pintar();
+  });
+  if (propio) {
+    propio.addEventListener('input', function () {
+      if (propioRadio) propioRadio.checked = true;
+      pintar();
+    });
+  }
+  form.addEventListener('reset', function () { setTimeout(pintar, 0); });
+
+  var nombreCampo = form.querySelector('[data-ap-nombre-campo]');
+  var previaNombre = form.querySelector('[data-ap-previa-nombre]');
+  if (nombreCampo && previaNombre) {
+    nombreCampo.addEventListener('input', function () {
+      previaNombre.textContent = nombreCampo.value.trim() || 'Tu salón';
+    });
+  }
+
+  // Los dos botones de la cabecera de la previa, que sólo la cambian a
+  // pantalla clara u oscura. No guardan nada: el tema lo sigue eligiendo
+  // cada persona en Mi cuenta.
+  var modos = form.querySelector('[data-ap-modos]');
+  if (modos) {
+    modos.hidden = false;
+    modos.querySelectorAll('[data-ap-modo]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        modo = b.getAttribute('data-ap-modo');
+        modos.querySelectorAll('[data-ap-modo]').forEach(function (o) {
+          o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+        });
+        pintar();
+      });
+    });
+  }
+
+  // **El obligatorio entra y sale con el desplegable.** Un campo `required`
+  // adentro de un `<details>` cerrado está en `display:none`, y ahí el
+  // navegador se niega a enviar el formulario SIN DECIR NADA — es el defecto
+  // de la 7.67.0. En el marcado va sin `required`, así que sin JavaScript
+  // tampoco puede pasar; el control de verdad lo hace el servidor.
+  form.querySelectorAll('[data-ap-det]').forEach(function (d) {
+    var sincronizar = function () {
+      d.querySelectorAll('[data-ap-obligatorio]').forEach(function (c) {
+        if (d.open) c.setAttribute('required', 'required');
+        else c.removeAttribute('required');
+      });
+    };
+    d.addEventListener('toggle', sincronizar);
+    sincronizar();
+  });
+
+  pintar();
+});

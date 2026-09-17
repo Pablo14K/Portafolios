@@ -1,0 +1,1709 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Controllers;
+
+use App\Servicios\Auditoria;
+use App\Servicios\Bd;
+use App\Servicios\Borrador;
+use App\Servicios\Compras;
+use App\Servicios\Listado;
+use App\Servicios\Permisos;
+use App\Servicios\Persona;
+use App\Servicios\Respaldo;
+use App\Servicios\Sucursales;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
+
+/**
+ * Inventario: productos, stock, movimientos, compras y proveedores.
+ *
+ * Dos cosas del modelo que conviene no perder de vista:
+ *
+ *  · **El stock no se guarda**: lo calcula `fn_producto_stock` sumando los
+ *    movimientos según su signo. No hay una columna «stock» que pueda quedar
+ *    desfasada de la realidad.
+ *
+ *  · **Lo que se compra y lo que se gasta no se miden igual.** El shampoo se
+ *    compra por frasco de 1 litro y se usa de a 30 ml. El stock se guarda
+ *    siempre en la unidad de compra —la que factura el proveedor—, y la
+ *    conversión pasa al entrar y al salir.
+ */
+class InventarioController extends Controller
+{
+    /** Tipos de movimiento: 2 salida por consumo · 3 ajuste + · 4 ajuste − · 9 stock inicial */
+    private const AJUSTE_MAS = 3;
+
+    private const AJUSTE_MENOS = 4;
+
+    private const STOCK_INICIAL = 9;
+
+    public function index(): View
+    {
+        return view('inventario.index', [
+            'subs' => Permisos::tarjetasPermitidas([
+                ['p' => 'inventario.productos', 'ruta' => 'inventario.productos', 'ic' => 'box-seam',
+                 't' => 'Productos', 'd' => 'Catálogo, precios y stock mínimo'],
+                ['p' => 'inventario.productos', 'ruta' => 'inventario.categorias', 'ic' => 'tags',
+                 't' => 'Categorías', 'd' => 'Tipos de producto'],
+                ['p' => 'inventario.proveedores', 'ruta' => 'inventario.proveedores', 'ic' => 'truck',
+                 't' => 'Proveedores', 'd' => 'Datos y saldos'],
+                ['p' => 'inventario.stock', 'ruta' => 'inventario.stock', 'ic' => 'clipboard-data',
+                 't' => 'Stock', 'd' => 'Existencias y alertas de reposición'],
+                ['p' => 'inventario.stock', 'ruta' => 'inventario.movimientos', 'ic' => 'arrow-left-right',
+                 't' => 'Movimientos', 'd' => 'Entradas y salidas de stock'],
+                ['p' => 'inventario.compras', 'ruta' => 'inventario.compras', 'ic' => 'bag',
+                 't' => 'Compras', 'd' => 'Ingresos de mercadería'],
+            ]),
+        ]);
+    }
+
+    // ---------- Productos ----------
+
+    public function productos(): View|StreamedResponse
+    {
+        // **La lista sale del CATÁLOGO, no del stock de este local**, y esa es la
+        // diferencia que hace posible traer un producto de otra sucursal en vez
+        // de volver a cargarlo. Consultando `vw_producto_stock` a secas —que ya
+        // viene unida a `producto_sucursal`— lo que no se maneja acá no existe,
+        // así que la única salida era escribirlo de nuevo: dos filas para el
+        // mismo frasco, con el nombre puesto por dos personas distintas.
+        $varias = count(Sucursales::delUsuario()) > 1;
+        $aqui = Sucursales::activa();
+
+        $campos = [
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Nombre del producto', 'ancho' => '240px'],
+            'categoria' => ['tipo' => 'select', 'etiqueta' => 'Categoría',
+                            'opciones' => ['' => 'Todas'] + $this->categoriasPorNombre()],
+            'estado' => ['tipo' => 'select', 'etiqueta' => 'Estado',
+                         'opciones' => ['' => 'Todos', '1' => 'Activos', '0' => 'Inactivos']],
+            'stock' => ['tipo' => 'select', 'etiqueta' => 'Existencias',
+                        'opciones' => ['' => 'Todas', 'bajo' => 'Bajo el mínimo', 'cero' => 'Sin stock', 'hay' => 'Con stock']],
+        ];
+
+        $f = Listado::filtros($campos);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = ['suc' => $aqui ?: 0];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(['p.nombre'], Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'categoria')) {
+            $w[] = 'cp.nombre = :c';
+            $par['c'] = Listado::valor($f, 'categoria');
+        }
+        if (Listado::hay($f, 'estado')) {
+            $w[] = 'p.activo = :e';
+            $par['e'] = (int) Listado::valor($f, 'estado');
+        }
+        // **Un marcador por uso, nunca el mismo dos veces**: la conexión abre PDO
+        // con `ATTR_EMULATE_PREPARES` en false, así que MySQL prepara de verdad y
+        // `:suc` repetido revienta con *Invalid parameter number*.
+        if (Listado::hay($f, 'stock')) {
+            $w[] = ['bajo' => 'fn_producto_stock(p.id_producto, :sucf) < ps.stock_minimo',
+                    'cero' => 'fn_producto_stock(p.id_producto, :sucf) <= 0',
+                    'hay' => 'fn_producto_stock(p.id_producto, :sucf) > 0'][Listado::valor($f, 'stock')];
+            $par['sucf'] = $aqui ?: 0;
+        }
+
+        // Por defecto se ve lo de acá, que es con lo que se trabaja todos los
+        // días; lo de los otros locales hay que pedirlo.
+        // **La lista es la de ESTE local.** Había un filtro «Dónde se maneja»
+        // con «Sólo en otras sucursales» y «Todo el catálogo»; el usuario pidió
+        // lo contrario: quien maneja el depósito de San Lorenzo no tiene por qué
+        // ver una lista de productos que no tiene, con una columna para adivinar
+        // cuáles sí. Lo que existe en otro lado se trae desde el alta.
+        if ($aqui) {
+            $w[] = 'ps.id_producto IS NOT NULL';
+        }
+
+        $desde = 'FROM producto p
+                  JOIN categoria_producto cp ON cp.id_categoria = p.id_categoria
+                  LEFT JOIN producto_sucursal ps
+                         ON ps.id_producto = p.id_producto AND ps.id_sucursal = :suc
+                  WHERE ' . implode(' AND ', $w);
+        $campoStock = 'p.id_producto, p.nombre, p.unidad_medida, p.precio_costo, p.precio_venta, p.activo,
+                       p.contenido, p.unidad_consumo,
+                       cp.nombre AS categoria, ps.id_producto AS aca,
+                       COALESCE(ps.stock_minimo, 0) AS stock_minimo,
+                       IF(ps.id_producto IS NULL, NULL, fn_producto_stock(p.id_producto, :sucs)) AS stock_actual';
+
+        if (Listado::pideExport()) {
+            $parE = $par + ['sucs' => $aqui ?: 0];
+
+            return Listado::exportar('productos',
+                // «Venta» sale de la exportación por lo mismo que de la pantalla:
+                // el salón vende servicios, no productos (ver el formulario del
+                // producto). Para revertirlo, se devuelven la columna y el campo.
+                ['Producto', 'Categoría', 'Unidad', 'Stock', 'Mínimo', 'Costo', 'Estado'],
+                array_map(fn ($r) => [$r->nombre, $r->categoria, $r->unidad_medida, $r->stock_actual,
+                    $r->stock_minimo, $r->precio_costo, $r->activo ? 'Activo' : 'Inactivo'],
+                    DB::select("SELECT $campoStock $desde ORDER BY p.nombre", $parE)),
+                $f, 'Productos'
+            );
+        }
+
+        // El COUNT no nombra `:sucs`, así que el marcador se suma DESPUÉS: PDO
+        // rechaza un parámetro que la consulta no usa.
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+        $par['sucs'] = $aqui ?: 0;
+
+        return view('inventario.productos', [
+            'rows' => DB::select("SELECT $campoStock $desde ORDER BY p.nombre LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            'f' => $f,
+            'pag' => $pag,
+            'varias' => $varias,
+            // Las otras sucursales, con cuántos productos manejan que acá
+            // falten: sin ese número el botón promete algo que puede ser cero.
+            'otras' => $varias ? DB::select(
+                'SELECT s.id_sucursal, s.nombre,
+                        (SELECT COUNT(*) FROM producto_sucursal o
+                          WHERE o.id_sucursal = s.id_sucursal
+                            AND NOT EXISTS (SELECT 1 FROM producto_sucursal d
+                                             WHERE d.id_producto = o.id_producto AND d.id_sucursal = ?)
+                        ) AS faltan
+                   FROM sucursal s
+                  WHERE s.activo = 1 AND s.id_sucursal <> ?
+                  ORDER BY s.nombre', [$aqui, $aqui]
+            ) : [],
+        ]);
+    }
+
+    public function productoForm(int $id = 0): View|RedirectResponse
+    {
+        // **El mínimo se trae de `producto_sucursal`, no de `producto`.**
+        // Vive ahí desde la 7.33.0 —es del local, no del catálogo— y el
+        // formulario lo seguía leyendo del producto: `$p->stock_minimo` no
+        // existía, así que al editar salía en **0** y al guardar se pisaba con
+        // 0. Encima el guardado rechaza el cero (7.80.0), así que editar un
+        // producto era un rechazo seguro y el formulario volvía con los montos
+        // cambiados. Es el defecto reportado.
+        $suc = Sucursales::activa();
+        $p = $id ? DB::selectOne(
+            'SELECT p.*, COALESCE(ps.stock_minimo, 0) AS stock_minimo
+               FROM producto p
+               LEFT JOIN producto_sucursal ps ON ps.id_producto = p.id_producto AND ps.id_sucursal = ?
+              WHERE p.id_producto = ?', [$suc ?: 1, $id]) : null;
+        if ($id && ! $p) {
+            flash('Producto no encontrado.', 'error');
+
+            return redirect()->route('inventario.productos');
+        }
+
+        // **Lo que ya existe se trae, no se vuelve a cargar.** Escrito de nuevo,
+        // «Shampoo profesional 1L» queda como dos filas —«Shampoo prof. 1 L» y
+        // «Shampoo profesional 1L»— con dos unidades y dos contenidos, y a
+        // partir de ahi ni el consumo fraccionado ni ningun informe pueden
+        // comparar el mismo frasco entre sucursales. Traerlo no copia nada:
+        // agrega la fila de `producto_sucursal` que dice que aca tambien se
+        // maneja, con su propio minimo.
+
+        return view('inventario.producto_form', [
+            'p' => $p,
+            'cats' => DB::select('SELECT * FROM categoria_producto ORDER BY nombre'),
+            'ajenos' => ($suc && ! $id) ? DB::select(
+                'SELECT pr.id_producto, pr.nombre, pr.unidad_medida, cp.nombre AS categoria
+                   FROM producto pr
+                   JOIN categoria_producto cp ON cp.id_categoria = pr.id_categoria
+                  WHERE pr.activo = 1
+                    AND NOT EXISTS (SELECT 1 FROM producto_sucursal ps
+                                     WHERE ps.id_producto = pr.id_producto AND ps.id_sucursal = ?)
+                  ORDER BY cp.nombre, pr.nombre', [$suc]
+            ) : [],
+        ]);
+    }
+
+    public function productoGuardar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_producto', 0);
+        $d = [
+            'id_categoria' => (int) $request->input('id_categoria', 0),
+            'nombre' => trim((string) $request->input('nombre', '')),
+            'descripcion' => trim((string) $request->input('descripcion', '')) ?: null,
+            'unidad_medida' => trim((string) $request->input('unidad_medida', 'unidad')) ?: 'unidad',
+            // Los dos van juntos o ninguno: con uno solo no se puede convertir
+            'contenido' => num($request->input('contenido')) ?: null,
+            'unidad_consumo' => trim((string) $request->input('unidad_consumo', '')) ?: null,
+            'precio_costo' => num($request->input('precio_costo')),
+            'tasa_iva' => (int) $request->input('tasa_iva', 10),
+        ];
+        $stockInicial = num($request->input('stock_inicial'));
+
+        // **El mínimo a reponer es del LOCAL, no del producto.** Un salón grande
+        // guarda más shampoo que el chico, así que el dato depende de (producto,
+        // sucursal) y vive en `producto_sucursal`. El nombre, la categoría, la
+        // unidad y el contenido son del producto y valen igual en los dos.
+        $minimo = num($request->input('stock_minimo'));
+        $suc = Sucursales::activa() ?: 1;
+
+        // **El precio de venta ya NO se pide** —el salón vende servicios, no
+        // productos— pero la columna es NOT NULL y sigue en la base, así que
+        // hay que darle un valor. Y hay que darle **el que ya tenía**: leerlo
+        // del formulario que no lo manda daría 0, y editar cualquier producto
+        // le borraría el precio cargado. Si algún día se revierte la decisión,
+        // lo que el salón había puesto sigue estando.
+        $d['precio_venta'] = $id
+            ? (float) DB::scalar('SELECT precio_venta FROM producto WHERE id_producto = ?', [$id])
+            : 0.0;
+        $volver = $id ? redirect()->route('inventario.producto_form', $id) : redirect()->route('inventario.producto_form');
+
+        $error = null;
+        if ($d['nombre'] === '') {
+            $error = 'El nombre del producto es obligatorio.';
+        } elseif ($d['id_categoria'] <= 0
+            || ! DB::scalar('SELECT COUNT(*) FROM categoria_producto WHERE id_categoria = ?', [$d['id_categoria']])) {
+            $error = 'Elegí una categoría válida.';
+        } elseif (DB::scalar('SELECT COUNT(*) FROM producto WHERE nombre = ? AND id_producto <> ?', [$d['nombre'], $id])) {
+            $error = 'Ya existe un producto con ese nombre.';
+        } elseif ($d['precio_costo'] < 0) {
+            $error = 'El precio no puede ser negativo.';
+        } elseif ($minimo <= 0) {
+            // **Un mínimo en cero no avisa nunca.** `vw_producto_bajo_stock`
+            // compara `stock < stock_minimo`, así que con cero la condición no
+            // se cumple ni con el depósito vacío: el producto desaparece del
+            // aviso de reposición y el salón se entera cuando lo va a usar.
+            //
+            // Se veía en la pantalla de Stock: cuatro de cinco productos con
+            // «faltan 0» y costo de reponer Gs. 0, que se lee como que están
+            // bien cuando en realidad no había ninguno.
+            $error = 'El stock mínimo tiene que ser mayor a cero: es a partir de cuánto '
+                   . 'el sistema avisa que hay que reponer. Con cero no avisa nunca.';
+        } elseif (! in_array($d['tasa_iva'], [0, 5, 10], true)) {
+            $error = 'La tasa de IVA debe ser 0, 5 o 10.';
+        } elseif ($stockInicial < 0) {
+            $error = 'El stock inicial no puede ser negativo.';
+        } elseif (($d['contenido'] === null) !== ($d['unidad_consumo'] === null)) {
+            $error = 'Para un producto que se usa de a poco hacen falta las dos cosas: '
+                   . 'cuánto trae cada unidad y en qué se mide.';
+        } elseif ($d['contenido'] !== null && $d['contenido'] <= 0) {
+            $error = 'El contenido de cada unidad tiene que ser mayor a cero.';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->withInput();
+        }
+
+        try {
+            if ($id) {
+                DB::update(
+                    'UPDATE producto SET id_categoria=:id_categoria, nombre=:nombre, descripcion=:descripcion,
+                        unidad_medida=:unidad_medida, contenido=:contenido, unidad_consumo=:unidad_consumo,
+                        precio_costo=:precio_costo, precio_venta=:precio_venta, tasa_iva=:tasa_iva
+                      WHERE id_producto=:id', $d + ['id' => $id]
+                );
+                Auditoria::registrar('MODIFICACION', 'Inventario', 'producto', $id, $d['nombre']);
+                flash('Producto actualizado.');
+            } else {
+                DB::insert(
+                    'INSERT INTO producto (id_categoria,nombre,descripcion,unidad_medida,contenido,unidad_consumo,
+                        precio_costo,precio_venta,tasa_iva)
+                     VALUES (:id_categoria,:nombre,:descripcion,:unidad_medida,:contenido,:unidad_consumo,
+                        :precio_costo,:precio_venta,:tasa_iva)', $d
+                );
+                $id = (int) DB::getPdo()->lastInsertId();
+                Auditoria::registrar('ALTA', 'Inventario', 'producto', $id, $d['nombre']);
+            }
+
+            // El producto queda habilitado en el local en el que se trabaja, con
+            // su mínimo. Va en las dos ramas: editando desde el segundo local, un
+            // producto del catálogo que ese local todavía no manejaba entra acá.
+            DB::insert(
+                'INSERT INTO producto_sucursal (id_producto,id_sucursal,stock_minimo)
+                 VALUES (?,?,?) ON DUPLICATE KEY UPDATE stock_minimo = VALUES(stock_minimo)',
+                [$id, $suc, $minimo]
+            );
+
+            if (! (int) $request->input('id_producto', 0)) {
+                // Stock inicial sin pasar por una compra
+                if ($stockInicial > 0) {
+                    Bd::procedimiento('sp_registrar_movimiento_inventario', [
+                        $id, $suc, (int) session('uid'), self::STOCK_INICIAL, $stockInicial,
+                        $d['precio_costo'], 'ALTA', 'Stock inicial cargado al crear el producto',
+                    ]);
+                    flash('Producto creado con un stock inicial de ' . cant($stockInicial) . ' ' . $d['unidad_medida'] . '.');
+                } else {
+                    flash('Producto creado. Cargale stock desde «Cargar stock» cuando lo tengas.');
+                }
+            }
+
+            // Se compra por envase y nadie dijo qué trae adentro.
+            //
+            // No se rechaza —hay envases que sí se gastan enteros— pero se
+            // avisa, porque el efecto no se ve hasta que alguien registra una
+            // atención: ahí la pantalla pide «cantidad» en cajas, y un 1
+            // descuenta la caja entera cuando lo que se usó fue un par de
+            // guantes. Es exactamente lo que pasó con «Guantes de latex (caja)».
+            if (unidad_es_envase($d['unidad_medida']) && $d['contenido'] === null) {
+                flash('Ojo: lo cargaste por «' . $d['unidad_medida'] . '» y no dijiste cuánto trae cada una, '
+                    . 'así que al registrar una atención se va a descontar de a ' . $d['unidad_medida']
+                    . ' enteras. Si se gasta por partes, completá «Contenido de cada unidad» y '
+                    . '«Se gasta en» —por ejemplo 100 y «par»— y el sistema hace la cuenta solo.', 'warning');
+            }
+        } catch (Throwable) {
+            flash('No se pudo guardar el producto.', 'error');
+
+            return $volver->withInput();
+        }
+
+        return redirect()->route('inventario.productos');
+    }
+
+    public function productoBaja(Request $request): RedirectResponse
+    {
+        DB::update('UPDATE producto SET activo = 1 - activo WHERE id_producto = ?',
+            [(int) $request->input('id_producto', 0)]);
+        flash('Estado del producto actualizado.');
+
+        return redirect()->route('inventario.productos');
+    }
+
+    /**
+     * Trae a este local un producto que ya existe en el catálogo.
+     *
+     * **Es la alternativa a cargarlo de nuevo, y existe para que nadie lo
+     * cargue de nuevo.** Escrito otra vez, «Shampoo profesional 1L» termina
+     * siendo dos filas —«Shampoo profesional 1 L», «Shampoo prof. 1L»— con dos
+     * unidades y dos contenidos puestos por dos personas distintas, y a partir
+     * de ahí ni el consumo fraccionado ni ningún informe pueden comparar el
+     * mismo frasco entre sucursales.
+     *
+     * No copia nada: agrega la fila de `producto_sucursal` que dice que este
+     * local también lo maneja. El producto sigue siendo uno, con su nombre, su
+     * unidad y su contenido; **lo que es del local es el stock y el mínimo**, y
+     * el stock arranca en cero porque todavía no llegó ni un frasco acá.
+     */
+    public function productoTraer(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_producto', 0);
+        $suc = Sucursales::activa();
+
+        if (! $suc) {
+            flash('Elegí una sucursal antes de traer un producto.', 'error');
+
+            return redirect()->route('inventario.productos');
+        }
+
+        $p = DB::selectOne('SELECT nombre, unidad_medida FROM producto WHERE id_producto = ?', [$id]);
+        if (! $p) {
+            flash('Producto no encontrado.', 'error');
+
+            return redirect()->route('inventario.productos');
+        }
+
+        DB::insert('INSERT IGNORE INTO producto_sucursal (id_producto,id_sucursal) VALUES (?,?)', [$id, $suc]);
+
+        Auditoria::registrar('ALTA', 'Inventario', 'producto_sucursal', $id,
+            '«' . $p->nombre . '» pasa a manejarse en ' . Sucursales::nombreActiva());
+
+        flash('«' . $p->nombre . '» ya se maneja en ' . Sucursales::nombreActiva()
+            . '. Empieza en cero: cargale stock cuando lo tengas.');
+
+        return redirect()->route('inventario.ajuste', ['producto' => $id]);
+    }
+
+    /**
+     * Trae de una vez todo lo que otra sucursal maneja y acá no.
+     *
+     * **Un local que abre arranca con el catálogo vacío**, y traer los
+     * productos de a uno son treinta clics para dejarlo igual que la casa
+     * central. Es el mismo argumento por el que existe «traer»: cargarlos de
+     * nuevo escribiría «Shampoo profesional 1L» de dos formas y ningún informe
+     * podría comparar el mismo frasco entre locales (7.33.0).
+     *
+     * **No pisa nada ni copia stock**: sólo dice qué productos se manejan acá.
+     * El stock es de cada sede y empieza en cero, como en el alta de uno solo.
+     */
+    public function productosTraerTodos(Request $request): RedirectResponse
+    {
+        $origen = (int) $request->input('id_sucursal_origen', 0);
+        $suc = Sucursales::activa();
+        $volver = redirect()->route('inventario.productos');
+
+        if (! $suc) {
+            flash('Elegí una sucursal antes de traer productos.', 'error');
+
+            return $volver;
+        }
+        if ($origen === $suc || ! DB::scalar(
+            'SELECT COUNT(*) FROM sucursal WHERE id_sucursal = ? AND activo = 1', [$origen])) {
+            flash('Elegí la sucursal desde la que querés traer el catálogo.', 'error');
+
+            return $volver;
+        }
+
+        // Sólo los que allá se manejan y acá todavía no: `INSERT IGNORE` ya
+        // evitaría el duplicado, pero contar de antemano es lo que permite
+        // decir cuántos entraron de verdad.
+        $traidos = (int) DB::scalar(
+            'SELECT COUNT(*) FROM producto_sucursal o
+              WHERE o.id_sucursal = ?
+                AND NOT EXISTS (SELECT 1 FROM producto_sucursal d
+                                 WHERE d.id_producto = o.id_producto AND d.id_sucursal = ?)',
+            [$origen, $suc]
+        );
+
+        if (! $traidos) {
+            flash('Esa sucursal no maneja ningún producto que acá falte.', 'warning');
+
+            return $volver;
+        }
+
+        DB::insert(
+            'INSERT IGNORE INTO producto_sucursal (id_producto, id_sucursal)
+             SELECT o.id_producto, ? FROM producto_sucursal o WHERE o.id_sucursal = ?',
+            [$suc, $origen]
+        );
+
+        $nombreOrigen = (string) DB::scalar('SELECT nombre FROM sucursal WHERE id_sucursal = ?', [$origen]);
+        Auditoria::registrar('ALTA', 'Inventario', 'producto_sucursal', $suc,
+            $traidos . ' producto(s) traídos de ' . $nombreOrigen . ' a ' . Sucursales::nombreActiva());
+
+        flash($traidos . ' producto(s) de ' . $nombreOrigen . ' ya se manejan en '
+            . Sucursales::nombreActiva() . '. **Todos empiezan en cero**: cargales stock cuando los tengas.');
+
+        return $volver;
+    }
+
+    // ---------- Categorías de producto ----------
+
+    public function categorias(): View
+    {
+        return view('inventario.categorias', [
+            // **Las categorías de este local SE DEDUCEN**, por decisión del
+            // usuario: no hay tabla que diga cuáles maneja cada sede. Se cuenta
+            // con los productos de acá — con el conteo del salón entero, una
+            // categoría con ocho productos en la casa central y ninguno acá
+            // diría «8» y quien la mira no encontraría uno solo en su lista.
+            'rows' => DB::select(
+                'SELECT c.*, (SELECT COUNT(*) FROM producto p
+                                WHERE p.id_categoria = c.id_categoria
+                                  AND (:s1 = 0
+                                       OR EXISTS (SELECT 1 FROM producto_sucursal ps
+                                                   WHERE ps.id_producto = p.id_producto
+                                                     AND ps.id_sucursal = :s2))) AS usos
+                   FROM categoria_producto c ORDER BY c.nombre',
+                ['s1' => Sucursales::activa(), 's2' => Sucursales::activa()]
+            ),
+        ]);
+    }
+
+    public function categoriaCrear(Request $request): RedirectResponse
+    {
+        $nombre = trim((string) $request->input('nombre', ''));
+        if ($nombre === '') {
+            flash('Escribí el nombre de la categoría.', 'error');
+
+            return redirect()->route('inventario.categorias');
+        }
+
+        try {
+            DB::insert('INSERT INTO categoria_producto (nombre) VALUES (?)', [$nombre]);
+            Auditoria::registrar('ALTA', 'Inventario', 'categoria_producto', (int) DB::getPdo()->lastInsertId(), $nombre);
+            flash('Categoría «' . $nombre . '» agregada.');
+        } catch (Throwable) {
+            flash('Ya existe una categoría con ese nombre.', 'error');
+        }
+
+        return redirect()->route('inventario.categorias');
+    }
+
+    public function categoriaEditar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id', 0);
+        $nombre = trim((string) $request->input('nombre', ''));
+        if (! $id || $nombre === '') {
+            flash('El nombre no puede quedar vacío.', 'error');
+
+            return redirect()->route('inventario.categorias');
+        }
+
+        try {
+            DB::update('UPDATE categoria_producto SET nombre = ? WHERE id_categoria = ?', [$nombre, $id]);
+            Auditoria::registrar('MODIFICACION', 'Inventario', 'categoria_producto', $id, $nombre);
+            flash('Categoría actualizada.');
+        } catch (Throwable) {
+            flash('Ya existe otra categoría con ese nombre.', 'error');
+        }
+
+        return redirect()->route('inventario.categorias');
+    }
+
+    public function categoriaBorrar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id', 0);
+        $c = DB::selectOne('SELECT nombre FROM categoria_producto WHERE id_categoria = ?', [$id]);
+        if (! $c) {
+            flash('Esa categoría no existe.', 'error');
+
+            return redirect()->route('inventario.categorias');
+        }
+
+        // No se borra una categoría en uso: los productos quedarían sin clasificar
+        $usos = (int) DB::scalar('SELECT COUNT(*) FROM producto WHERE id_categoria = ?', [$id]);
+        if ($usos) {
+            flash("No se puede eliminar «{$c->nombre}»: hay $usos producto(s) en esa categoría.", 'warning');
+
+            return redirect()->route('inventario.categorias');
+        }
+
+        try {
+            DB::delete('DELETE FROM categoria_producto WHERE id_categoria = ?', [$id]);
+            Auditoria::registrar('BAJA', 'Inventario', 'categoria_producto', $id, 'Eliminó ' . $c->nombre);
+            flash('Categoría eliminada.');
+        } catch (Throwable) {
+            flash('No se pudo eliminar la categoría.', 'error');
+        }
+
+        return redirect()->route('inventario.categorias');
+    }
+
+    // ---------- Stock y movimientos ----------
+
+    public function stock(): View
+    {
+        $ps = []; $pb = [];
+
+        return view('inventario.stock', [
+            'rows' => DB::select('SELECT * FROM vw_producto_stock WHERE activo = 1' . Sucursales::filtro('vw_producto_stock', $ps) . ' ORDER BY nombre', $ps),
+            'bajo' => DB::select('SELECT * FROM vw_producto_bajo_stock WHERE 1=1' . Sucursales::filtro('vw_producto_bajo_stock', $pb, 'sucb') . ' ORDER BY faltante DESC', $pb),
+        ]);
+    }
+
+    public function movimientos(): View|StreamedResponse
+    {
+        // Producto y Tipo salen de los movimientos que hay, no del catálogo:
+        // `tipo_movimiento_inventario` tiene nueve clases y el salón mueve
+        // stock por dos —y «Venta de producto» está fuera de alcance—. Ver
+        // `Listado::opcionesUsadas()`. Sin acotar por local, igual que la lista.
+        $opProd = Listado::opcionesUsadas(
+            'SELECT p.id_producto AS k, p.nombre AS v
+               FROM movimiento_inventario m
+               JOIN producto p ON p.id_producto = m.id_producto
+              GROUP BY p.id_producto, p.nombre
+              ORDER BY p.nombre');
+        $opTipo = Listado::opcionesUsadas(
+            'SELECT tm.id_tipo_movimiento AS k, tm.nombre AS v
+               FROM movimiento_inventario m
+               JOIN tipo_movimiento_inventario tm ON tm.id_tipo_movimiento = m.id_tipo_movimiento
+              GROUP BY tm.id_tipo_movimiento, tm.nombre
+              ORDER BY tm.nombre');
+
+        $f = Listado::filtros([
+            'producto' => ['tipo' => 'select', 'etiqueta' => 'Producto', 'ancho' => '220px',
+                           'opciones' => ['' => 'Todos'] + $opProd],
+            'tipo' => ['tipo' => 'select', 'etiqueta' => 'Tipo',
+                       'opciones' => ['' => 'Todos'] + $opTipo],
+            'signo' => ['tipo' => 'select', 'etiqueta' => 'Sentido',
+                        'opciones' => ['' => 'Ambos', 'E' => 'Entradas', 'S' => 'Salidas']],
+            'desde' => ['tipo' => 'fecha', 'etiqueta' => 'Desde'],
+            'hasta' => ['tipo' => 'fecha', 'etiqueta' => 'Hasta'],
+        ]);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'producto')) {
+            $w[] = 'm.id_producto = :p';
+            $par['p'] = (int) Listado::valor($f, 'producto');
+        }
+        if (Listado::hay($f, 'tipo')) {
+            $w[] = 'm.id_tipo_movimiento = :t';
+            $par['t'] = (int) Listado::valor($f, 'tipo');
+        }
+        if (Listado::hay($f, 'signo')) {
+            $w[] = 'tm.signo = :s';
+            $par['s'] = Listado::valor($f, 'signo');
+        }
+        if (Listado::hay($f, 'desde')) {
+            $w[] = 'DATE(m.fecha) >= :d';
+            $par['d'] = Listado::valor($f, 'desde');
+        }
+        if (Listado::hay($f, 'hasta')) {
+            $w[] = 'DATE(m.fecha) <= :h';
+            $par['h'] = Listado::valor($f, 'hasta');
+        }
+
+        $desde = 'FROM movimiento_inventario m
+                  JOIN producto p ON p.id_producto = m.id_producto
+                  JOIN tipo_movimiento_inventario tm ON tm.id_tipo_movimiento = m.id_tipo_movimiento
+                  JOIN usuario u  ON u.id_usuario = m.id_usuario
+                  JOIN persona pe_u ON pe_u.id_persona = u.id_persona
+                  WHERE ' . implode(' AND ', $w);
+        $cols = "m.fecha, m.cantidad, m.precio_unitario, m.referencia, m.observaciones,
+                 p.nombre AS producto, p.unidad_medida, p.contenido, p.unidad_consumo,
+                 tm.nombre AS tipo, tm.signo,
+                 CONCAT(pe_u.nombre,' ',pe_u.apellido) AS usuario";
+        $orden = 'ORDER BY m.fecha DESC, m.id_movimiento DESC';
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('movimientos',
+                ['Fecha', 'Producto', 'Tipo', 'Sentido', 'Cantidad', 'Unidad', 'Precio', 'Referencia', 'Usuario', 'Observaciones'],
+                array_map(fn ($r) => [fecha($r->fecha, 'd/m/Y H:i'), $r->producto, $r->tipo,
+                    $r->signo === 'E' ? 'Entrada' : 'Salida', $r->cantidad, $r->unidad_medida,
+                    $r->precio_unitario, $r->referencia, $r->usuario, $r->observaciones],
+                    DB::select("SELECT $cols $desde $orden", $par)),
+                $f, 'Movimientos de stock'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par), 30);
+        $idp = (int) Listado::valor($f, 'producto');
+
+        return view('inventario.movimientos', [
+            'rows' => DB::select("SELECT $cols $desde $orden LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            'f' => $f,
+            'pag' => $pag,
+            'prod' => $idp ? DB::selectOne(
+                'SELECT nombre, unidad_medida, contenido, unidad_consumo,
+                        fn_producto_stock(id_producto, ?) AS stock
+                   FROM producto WHERE id_producto = ?', [Sucursales::activa() ?: 1, $idp]
+            ) : null,
+        ]);
+    }
+
+    // ---------- Cargar / corregir stock sin pasar por una compra ----------
+    //
+    //  Dos modos: «fijar» deja el stock en el número que se indique (calcula la
+    //  diferencia y genera el ajuste que corresponda) y «movimiento» registra
+    //  una entrada o salida puntual (merma, devolución, inventario inicial).
+
+    public function ajuste(): View
+    {
+        // Sólo los productos de ESTE local: cargarle stock a un producto de la
+        // otra sucursal sería mover mercadería que no está acá.
+        $pp = [];
+
+        return view('inventario.ajuste', [
+            'prods' => DB::select(
+                'SELECT p.id_producto, p.nombre, p.unidad_medida, p.contenido, p.unidad_consumo, p.precio_costo,
+                        fn_producto_stock(p.id_producto, ps.id_sucursal) AS stock
+                   FROM producto p
+                   JOIN producto_sucursal ps ON ps.id_producto = p.id_producto AND ps.id_sucursal = ?
+                  WHERE p.activo = 1 AND ps.activo = 1 ORDER BY p.nombre', [Sucursales::activa() ?: 1]
+            ),
+            'tipos' => DB::select('SELECT * FROM tipo_movimiento_inventario WHERE activo = 1 ORDER BY signo DESC, nombre'),
+            'cats' => DB::select('SELECT id_categoria, nombre FROM categoria_producto ORDER BY nombre'),
+            'sel' => (int) request()->query('producto', 0),
+        ]);
+    }
+
+    public function ajusteGuardar(Request $request): RedirectResponse
+    {
+        $idp = (int) $request->input('id_producto', 0);
+        $modo = (string) $request->input('modo', 'movimiento');
+        $ref = trim((string) $request->input('referencia', '')) ?: null;
+        $obs = trim((string) $request->input('observaciones', '')) ?: null;
+        $precio = num($request->input('precio_unitario'));
+        $volver = redirect()->route('inventario.ajuste');
+
+        $prod = DB::selectOne(
+            'SELECT p.id_producto, p.nombre, p.unidad_medida, p.precio_costo,
+                    fn_producto_stock(p.id_producto, ?) AS stock
+               FROM producto p
+               JOIN producto_sucursal ps ON ps.id_producto = p.id_producto AND ps.id_sucursal = ?
+              WHERE p.id_producto = ? AND p.activo = 1',
+            [Sucursales::activa() ?: 1, Sucursales::activa() ?: 1, $idp]
+        );
+        if (! $prod) {
+            flash('Elegí un producto activo.', 'error');
+
+            return $volver;
+        }
+        if ($precio < 0) {
+            flash('El precio no puede ser negativo.', 'error');
+
+            return $volver;
+        }
+
+        if ($modo === 'fijar') {
+            $destino = num($request->input('stock_nuevo'), -1);
+            if ($destino < 0) {
+                flash('Indicá en cuánto tiene que quedar el stock.', 'error');
+
+                return $volver;
+            }
+            $actual = (float) $prod->stock;
+            $dif = round($destino - $actual, 2);
+            if (abs($dif) < 0.005) {
+                flash('El stock de ' . $prod->nombre . ' ya es ' . cant($destino) . ': no hay nada que ajustar.', 'info');
+
+                return redirect()->route('inventario.stock');
+            }
+
+            try {
+                Bd::procedimiento('sp_registrar_movimiento_inventario', [
+                    $idp, Sucursales::activa() ?: 1, (int) session('uid'),
+                    $dif > 0 ? self::AJUSTE_MAS : self::AJUSTE_MENOS,
+                    abs($dif), $precio ?: (float) $prod->precio_costo, $ref ?: 'AJUSTE',
+                    $obs ?: ('Stock fijado en ' . cant($destino) . ' (antes ' . cant($actual) . ')'),
+                ]);
+                Auditoria::registrar('AJUSTE_STOCK', 'Inventario', 'producto', $idp,
+                    $prod->nombre . ': ' . cant($actual) . ' → ' . cant($destino));
+                flash('Stock de ' . $prod->nombre . ' ajustado a ' . cant($destino) . ' ' . $prod->unidad_medida . '.');
+            } catch (Throwable) {
+                flash('No se pudo ajustar el stock.', 'error');
+            }
+
+            return redirect()->route('inventario.stock');
+        }
+
+        // Modo movimiento puntual
+        $tipoMov = (int) $request->input('id_tipo_movimiento', 0);
+        $cantidad = num($request->input('cantidad'));
+        $tipo = DB::selectOne(
+            'SELECT id_tipo_movimiento, nombre, signo FROM tipo_movimiento_inventario
+              WHERE id_tipo_movimiento = ? AND activo = 1', [$tipoMov]
+        );
+        if (! $tipo) {
+            flash('Elegí un tipo de movimiento válido.', 'error');
+
+            return $volver;
+        }
+        if ($cantidad <= 0) {
+            flash('La cantidad tiene que ser mayor a cero.', 'error');
+
+            return $volver;
+        }
+        if ($tipo->signo === 'S' && $cantidad > (float) $prod->stock) {
+            flash('No hay stock suficiente: ' . $prod->nombre . ' tiene ' . cant($prod->stock)
+                . ' ' . $prod->unidad_medida . '.', 'error');
+
+            return $volver;
+        }
+
+        try {
+            Bd::procedimiento('sp_registrar_movimiento_inventario',
+                [$idp, Sucursales::activa() ?: 1, (int) session('uid'), $tipoMov, $cantidad, $precio, $ref, $obs]);
+            Auditoria::registrar('MOVIMIENTO_STOCK', 'Inventario', 'producto', $idp,
+                $tipo->nombre . ' de ' . cant($cantidad) . ' — ' . $prod->nombre);
+            flash('Movimiento registrado: ' . $tipo->nombre . ' de ' . cant($cantidad) . ' ' . $prod->unidad_medida . '.');
+        } catch (Throwable $ex) {
+            flash(str_contains($ex->getMessage(), 'stock')
+                ? 'No hay stock suficiente para esa salida.' : 'No se pudo registrar el movimiento.', 'error');
+        }
+
+        return redirect()->route('inventario.stock');
+    }
+
+    // ---------- Proveedores ----------
+
+    public function proveedores(): View|StreamedResponse
+    {
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Razón social, RUC o contacto', 'ancho' => '280px'],
+            'estado' => ['tipo' => 'select', 'etiqueta' => 'Estado',
+                         'opciones' => ['' => 'Todos', '1' => 'Activos', '0' => 'Inactivos']],
+            'saldo' => ['tipo' => 'select', 'etiqueta' => 'Deuda',
+                        'opciones' => ['' => 'Todos', 'pend' => 'Con saldo pendiente', 'ok' => 'Sin deuda']],
+        ]);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(['pe.nombre', 'pe.ruc', 'p.contacto', 'pe.telefono'],
+                Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'estado')) {
+            $w[] = 'p.activo = :e';
+            $par['e'] = (int) Listado::valor($f, 'estado');
+        }
+        if (Listado::hay($f, 'saldo')) {
+            $w[] = Listado::valor($f, 'saldo') === 'pend'
+                ? 'fn_proveedor_saldo(p.id_proveedor) > 0'
+                : 'fn_proveedor_saldo(p.id_proveedor) <= 0';
+        }
+
+        $desde = 'FROM proveedor p JOIN persona pe ON pe.id_persona = p.id_persona WHERE ' . implode(' AND ', $w);
+        $cols = 'p.*, pe.nombre, pe.ruc, pe.telefono, pe.email, pe.direccion,
+                 fn_proveedor_saldo(p.id_proveedor) AS saldo';
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('proveedores',
+                ['Proveedor', 'RUC', 'Contacto', 'Teléfono', 'Email', 'Dirección', 'Saldo', 'Estado'],
+                array_map(fn ($r) => [$r->nombre, $r->ruc, $r->contacto, $r->telefono, $r->email,
+                    $r->direccion, $r->saldo, $r->activo ? 'Activo' : 'Inactivo'],
+                    DB::select("SELECT $cols $desde ORDER BY pe.nombre", $par)),
+                $f, 'Proveedores'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+
+        return view('inventario.proveedores', [
+            'rows' => DB::select("SELECT $cols $desde ORDER BY pe.nombre LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            'f' => $f,
+            'pag' => $pag,
+        ]);
+    }
+
+    public function proveedorForm(int $id = 0): View|RedirectResponse
+    {
+        $p = $id ? DB::selectOne(
+            'SELECT p.*, pe.nombre, pe.ruc, pe.telefono, pe.email, pe.direccion
+               FROM proveedor p JOIN persona pe ON pe.id_persona = p.id_persona
+              WHERE p.id_proveedor = ?', [$id]
+        ) : null;
+
+        if ($id && ! $p) {
+            flash('Proveedor no encontrado.', 'error');
+
+            return redirect()->route('inventario.proveedores');
+        }
+
+        return view('inventario.proveedor_form', ['p' => $p]);
+    }
+
+    public function proveedorGuardar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_proveedor', 0);
+        $d = [
+            'nombre' => trim((string) $request->input('nombre', '')),
+            'contacto' => trim((string) $request->input('contacto', '')) ?: null,
+            'ruc' => trim((string) $request->input('ruc', '')) ?: null,
+            'telefono' => trim((string) $request->input('telefono', '')) ?: null,
+            'email' => trim((string) $request->input('email', '')) ?: null,
+            'direccion' => trim((string) $request->input('direccion', '')) ?: null,
+        ];
+        $volver = $id ? redirect()->route('inventario.proveedor_form', $id) : redirect()->route('inventario.proveedor_form');
+
+        $error = $d['nombre'] === '' ? 'El nombre es obligatorio.' : Persona::error($d);
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->withInput();
+        }
+
+        try {
+            if ($id) {
+                $idPersona = (int) DB::scalar('SELECT id_persona FROM proveedor WHERE id_proveedor = ?', [$id]);
+                Persona::guardar($idPersona, $d);
+                DB::update('UPDATE proveedor SET contacto = :contacto WHERE id_proveedor = :id',
+                    ['contacto' => $d['contacto'], 'id' => $id]);
+                Auditoria::registrar('MODIFICACION', 'Inventario', 'proveedor', $id, $d['nombre']);
+                flash('Proveedor actualizado.');
+            } else {
+                // Si el RUC ya está cargado puede ser la misma empresa: se
+                // reutiliza la persona en vez de duplicarla.
+                $idPersona = Persona::guardar(Persona::porDocumento(null, $d['ruc']), $d);
+                DB::insert('INSERT INTO proveedor (id_persona, contacto) VALUES (?,?)', [$idPersona, $d['contacto']]);
+                Auditoria::registrar('ALTA', 'Inventario', 'proveedor', (int) DB::getPdo()->lastInsertId(), $d['nombre']);
+                flash('Proveedor creado.');
+            }
+        } catch (Throwable) {
+            flash('No se pudo guardar (¿RUC duplicado?).', 'error');
+
+            return $volver->withInput();
+        }
+
+        return redirect()->route('inventario.proveedores');
+    }
+
+    public function proveedorBaja(Request $request): RedirectResponse
+    {
+        DB::update('UPDATE proveedor SET activo = 1 - activo WHERE id_proveedor = ?',
+            [(int) $request->input('id_proveedor', 0)]);
+        flash('Estado del proveedor actualizado.');
+
+        return redirect()->route('inventario.proveedores');
+    }
+
+    // ---------- Compras ----------
+
+    public function compras(): View|StreamedResponse
+    {
+        $f = Listado::filtros([
+            'q' => ['tipo' => 'texto', 'etiqueta' => 'Buscar', 'ph' => 'Proveedor o nº de factura', 'ancho' => '250px'],
+            'estado' => ['tipo' => 'select', 'etiqueta' => 'Estado',
+                         'opciones' => ['' => 'Todos'] + $this->estadosCompra()],
+            'saldo' => ['tipo' => 'select', 'etiqueta' => 'Deuda',
+                        'opciones' => ['' => 'Todas', 'pend' => 'Con saldo', 'ok' => 'Pagadas']],
+            'desde' => ['tipo' => 'fecha', 'etiqueta' => 'Desde'],
+            'hasta' => ['tipo' => 'fecha', 'etiqueta' => 'Hasta'],
+        ]);
+        $f['csv'] = true;
+
+        $w = ['1=1'];
+        $par = [];
+        if (Listado::hay($f, 'q')) {
+            $w[] = Listado::likeVarias(['v.proveedor', 'c.nro_factura_proveedor'], Listado::valor($f, 'q'), 'q', $par);
+        }
+        if (Listado::hay($f, 'estado')) {
+            $w[] = 'v.estado = :e';
+            $par['e'] = Listado::valor($f, 'estado');
+        }
+        if (Listado::hay($f, 'saldo')) {
+            $w[] = Listado::valor($f, 'saldo') === 'pend'
+                ? 'fn_compra_saldo(v.id_compra) > 0' : 'fn_compra_saldo(v.id_compra) <= 0';
+        }
+        if (Listado::hay($f, 'desde')) {
+            $w[] = 'DATE(v.fecha) >= :d';
+            $par['d'] = Listado::valor($f, 'desde');
+        }
+        if (Listado::hay($f, 'hasta')) {
+            $w[] = 'DATE(v.fecha) <= :h';
+            $par['h'] = Listado::valor($f, 'hasta');
+        }
+
+        $w[] = ltrim(Sucursales::filtro('c', $par), ' AND') ?: '1=1';
+        $desde = 'FROM vw_compra_resumen v JOIN compra c ON c.id_compra = v.id_compra WHERE ' . implode(' AND ', $w);
+        $cols = 'v.*, c.nro_factura_proveedor, fn_compra_saldo(v.id_compra) AS saldo,
+                 (SELECT COUNT(*) FROM detalle_compra d WHERE d.id_compra = v.id_compra) AS items';
+
+        if (Listado::pideExport()) {
+            return Listado::exportar('compras',
+                ['Fecha', 'Proveedor', 'Nº factura', 'Ítems', 'Total', 'Saldo', 'Estado', 'Registró'],
+                array_map(fn ($r) => [fecha($r->fecha, 'd/m/Y'), $r->proveedor, $r->nro_factura_proveedor,
+                    $r->items, $r->total, $r->saldo, $r->estado, $r->registro],
+                    DB::select("SELECT $cols $desde ORDER BY v.fecha DESC", $par)),
+                $f, 'Compras'
+            );
+        }
+
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $desde", $par));
+
+        return view('inventario.compras', [
+            'rows' => DB::select("SELECT $cols $desde ORDER BY v.fecha DESC LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $par),
+            'f' => $f,
+            'pag' => $pag,
+        ]);
+    }
+
+    public function compraVer(Request $request): View|RedirectResponse
+    {
+        $id = (int) $request->query('id', 0);
+        $compra = DB::selectOne(
+            'SELECT v.*, fn_compra_saldo(v.id_compra) AS saldo, fn_compra_vencimiento(v.id_compra) AS vencimiento,
+                    fn_compra_pagado(v.id_compra) AS pagado,
+                    fn_compra_cuota_pendiente(v.id_compra) AS cuota_pendiente,
+                    c.nro_factura_proveedor, c.id_estado_compra, cv.nombre AS condicion, cv.dias_credito
+               FROM vw_compra_resumen v
+               JOIN compra c ON c.id_compra = v.id_compra
+               JOIN condicion_venta cv ON cv.id_condicion_venta = c.id_condicion_venta
+              WHERE v.id_compra = ?', [$id]
+        );
+        if (! $compra) {
+            flash('Esa compra no existe.', 'error');
+
+            return redirect()->route('inventario.compras');
+        }
+
+        return view('inventario.compra_ver', [
+            'compra' => $compra,
+            // Las referencias de los pagos ya hechos a ese proveedor: si al
+            // pagar se anotó el número del papel, no hay por qué tipearlo otra
+            // vez. Se ofrecen, no se imponen.
+            'facturasSugeridas' => $this->facturasDelProveedor((int) $compra->id_compra),
+
+            // **Lo que ya se le pagó a esta compra.** El pago queda ligado en
+            // `detalle_pago_proveedor` desde siempre y no se veía por ningún
+            // lado: la compra decía cuánto debe y no de dónde salía ese saldo,
+            // así que para saber si un pago entró había que ir a Tesorería y
+            // buscarlo entre todos los del proveedor.
+            'pagos' => DB::select(
+                "SELECT pp.fecha, d.monto_aplicado AS monto, pp.referencia,
+                        mp.nombre AS metodo, ep.nombre AS estado
+                   FROM detalle_pago_proveedor d
+                   JOIN pago_proveedor pp ON pp.id_pago_proveedor = d.id_pago_proveedor
+                   JOIN metodo_pago mp ON mp.id_metodo_pago = pp.id_metodo_pago
+                   JOIN estado_pago_proveedor ep ON ep.id_estado_pago_proveedor = pp.id_estado_pago_proveedor
+                  WHERE d.id_compra = ? ORDER BY pp.fecha", [(int) $compra->id_compra]
+            ),
+            'lineas' => DB::select(
+                'SELECT p.nombre, p.unidad_medida, cp.nombre AS categoria,
+                        d.cantidad, d.precio_unitario, d.tasa_iva,
+                        ROUND(d.cantidad * d.precio_unitario, 2) AS total_linea
+                   FROM detalle_compra d
+                   JOIN producto p ON p.id_producto = d.id_producto
+                   JOIN categoria_producto cp ON cp.id_categoria = p.id_categoria
+                  WHERE d.id_compra = ? ORDER BY p.nombre', [$id]
+            ),
+
+            // **La factura del proveedor, entera** (7.127.0): el IVA incluido
+            // por tasa —la misma cuenta que `vw_factura_impuestos` del otro
+            // lado del mostrador—, las cuotas con lo que le falta a cada una,
+            // y las notas de crédito que él emitió sobre esta compra.
+            'impuestos' => DB::selectOne('SELECT * FROM vw_compra_impuestos WHERE id_compra = ?', [$id]),
+            'cuotas' => Compras::cuotas((int) $compra->id_compra),
+            'notas' => DB::select(
+                "SELECT n.*, CONCAT(pe.nombre, ' ', pe.apellido) AS cargo
+                   FROM compra_nota_credito n
+                   JOIN usuario u ON u.id_usuario = n.id_usuario
+                   JOIN persona pe ON pe.id_persona = u.id_persona
+                  WHERE n.id_compra = ? ORDER BY n.fecha, n.id_nota", [$id]
+            ),
+        ]);
+    }
+
+    /**
+     * La nota de crédito del proveedor sobre una compra.
+     *
+     * **Una compra ES la factura del proveedor**, y una factura puede tener
+     * su nota de crédito: la que él emite cuando cobró de más, cuando se le
+     * devolvió mercadería o cuando concede un descuento después. Baja lo que
+     * se le debe como un pago, **pero no es un pago**: no salió un guaraní
+     * de ninguna caja, así que no toca ningún arqueo — por eso es
+     * `fn_compra_acreditado` y no entra en `fn_compra_pagado`.
+     *
+     * **Se adjunta el papel**, que es lo que el usuario pidió: sin el
+     * documento del proveedor, un número tipeado no respalda nada. Es
+     * opcional porque la nota puede llegar antes que su copia.
+     *
+     * **El tope es el saldo, no el total.** Una nota por más de lo que se
+     * debe sería un crédito a favor del salón que el sistema no aplica a
+     * otras compras; antes que dejar plata flotando sin dueño, se dice.
+     *
+     * **Y no toca el stock, a propósito.** Si la nota es por mercadería
+     * devuelta, la salida se registra desde Inventario → Movimientos, que
+     * es donde vive todo lo que mueve stock: una nota es un documento de
+     * plata, y mezclarle un movimiento de depósito la volvería dos cosas.
+     */
+    public function compraNotaCredito(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_compra', 0);
+        $nro = trim((string) $request->input('nro_documento', ''));
+        $fecha = trim((string) $request->input('fecha', ''));
+        $monto = num($request->input('monto'));
+        $motivo = trim((string) $request->input('motivo', ''));
+        $volver = redirect()->route('inventario.compra_ver', ['id' => $id]);
+
+        $compra = DB::selectOne(
+            'SELECT id_compra, id_estado_compra, fn_compra_saldo(id_compra) AS saldo,
+                    fn_compra_total(id_compra) AS total
+               FROM compra WHERE id_compra = ?', [$id]
+        );
+
+        $error = null;
+        if (! $compra) {
+            flash('Esa compra no existe.', 'error');
+
+            return redirect()->route('inventario.compras');
+        } elseif ((int) $compra->id_estado_compra !== 2) {
+            $error = 'Sólo una compra confirmada puede tener nota de crédito.';
+        } elseif ($nro === '' || ! preg_match('/^[0-9][0-9-]{2,29}$/', $nro)) {
+            $error = 'El número de la nota de crédito va con números y guiones, así: 001-001-0000123.';
+        } elseif (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha) || ! strtotime($fecha)) {
+            $error = 'Poné la fecha de la nota de crédito.';
+        } elseif ($fecha > ahora_bd('Y-m-d')) {
+            $error = 'La nota de crédito no puede tener fecha futura.';
+        } elseif ($monto <= 0) {
+            $error = 'El monto de la nota tiene que ser mayor a cero.';
+        } elseif ($monto > (float) $compra->saldo + 0.005) {
+            $error = (float) $compra->saldo > 0
+                ? 'Esta compra debe ' . money($compra->saldo) . ': una nota de crédito por ' . money($monto)
+                    . ' dejaría un saldo a favor que el sistema no aplica a otras compras.'
+                : 'Esta compra ya está saldada: una nota de crédito ahora sería un crédito a favor '
+                    . 'que el sistema no aplica a otras compras. Cargala contra la próxima compra de ese proveedor.';
+        } elseif (mb_strlen($motivo) < 10) {
+            $error = 'Contá por qué el proveedor emitió la nota (al menos 10 caracteres): '
+                . 'devolución, cobro de más, descuento posterior…';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->withInput();
+        }
+
+        $archivo = null;
+        if ($request->hasFile('archivo')) {
+            $archivo = Respaldo::guardar($request->file('archivo'), 'nc' . $id);
+            if ($archivo === false) {
+                flash('El archivo de la nota tiene que ser una imagen (PNG, JPG o WEBP) o un PDF de hasta 3 MB.', 'error');
+
+                return $volver->withInput();
+            }
+        }
+
+        try {
+            DB::insert(
+                'INSERT INTO compra_nota_credito (id_compra, id_usuario, nro_documento, fecha, monto, motivo, archivo)
+                 VALUES (?,?,?,?,?,?,?)',
+                [$id, (int) session('uid'), $nro, $fecha, $monto, mb_substr($motivo, 0, 300), $archivo]
+            );
+            $idNota = (int) DB::getPdo()->lastInsertId();
+        } catch (Throwable $e) {
+            flash(Bd::traducir($e, [], 'No se pudo registrar la nota de crédito. El detalle quedó registrado.'), 'error');
+
+            return $volver->withInput();
+        }
+
+        Auditoria::registrar('NOTA_CREDITO', 'Inventario', 'compra_nota_credito', $idNota,
+            'Nota de crédito ' . $nro . ' del proveedor por ' . money($monto) . ' sobre la compra #' . $id
+            . ' — ' . $motivo . ($archivo ? ' (con el documento adjunto)' : ''));
+
+        $saldo = (float) DB::scalar('SELECT fn_compra_saldo(?)', [$id]);
+        flash('Nota de crédito ' . $nro . ' registrada: la compra '
+            . ($saldo > 0 ? 'queda debiendo ' . money($saldo) . '.' : 'queda saldada.'));
+
+        return $volver;
+    }
+
+    /**
+     * Anular una nota cargada mal. **Anular, no borrar**: la nota queda en la
+     * ficha con su motivo, y deja de descontar.
+     */
+    public function compraNotaAnular(Request $request): RedirectResponse
+    {
+        $idNota = (int) $request->input('id_nota', 0);
+        $motivo = trim((string) $request->input('motivo', ''));
+
+        $nota = DB::selectOne(
+            'SELECT id_nota, id_compra, nro_documento, monto, activo FROM compra_nota_credito WHERE id_nota = ?',
+            [$idNota]
+        );
+        if (! $nota) {
+            flash('Esa nota de crédito no existe.', 'error');
+
+            return redirect()->route('inventario.compras');
+        }
+        $volver = redirect()->route('inventario.compra_ver', ['id' => (int) $nota->id_compra]);
+
+        if (! (int) $nota->activo) {
+            flash('Esa nota ya estaba anulada.', 'warning');
+
+            return $volver;
+        }
+        if (mb_strlen($motivo) < 10) {
+            flash('Contá por qué se anula la nota (al menos 10 caracteres).', 'error');
+
+            return $volver;
+        }
+
+        DB::update('UPDATE compra_nota_credito SET activo = 0, anulado_motivo = ? WHERE id_nota = ?',
+            [mb_substr($motivo, 0, 200), $idNota]);
+        Auditoria::registrar('ANULACION', 'Inventario', 'compra_nota_credito', $idNota,
+            'Nota de crédito ' . $nota->nro_documento . ' por ' . money($nota->monto) . ' anulada: ' . $motivo);
+        flash('Nota de crédito ' . $nota->nro_documento . ' anulada: vuelve a deberse ' . money($nota->monto) . '.');
+
+        return $volver;
+    }
+
+    /** El documento adjunto de una nota de crédito, servido desde el sistema. */
+    public function compraNotaArchivo(Request $request): BinaryFileResponse|RedirectResponse
+    {
+        $idNota = (int) $request->query('id', 0);
+        $nota = DB::selectOne('SELECT id_compra, archivo FROM compra_nota_credito WHERE id_nota = ?', [$idNota]);
+        if (! $nota) {
+            flash('Esa nota de crédito no existe.', 'error');
+
+            return redirect()->route('inventario.compras');
+        }
+
+        $ruta = Respaldo::ruta($nota->archivo);
+        if (! $ruta) {
+            flash('Esa nota no tiene el documento adjunto, o el archivo ya no está guardado.', 'warning');
+
+            return redirect()->route('inventario.compra_ver', ['id' => (int) $nota->id_compra]);
+        }
+
+        return response()->file($ruta);
+    }
+
+    public function compraForm(Request $request): View
+    {
+        // Sólo los productos de este local: una compra ingresa mercadería acá.
+        $suc = Sucursales::activa() ?: 1;
+
+        return view('inventario.compra_form', [
+            'proveedores' => DB::select(
+                'SELECT p.id_proveedor, pe.nombre FROM proveedor p
+                   JOIN persona pe ON pe.id_persona = p.id_persona
+                  WHERE p.activo = 1 ORDER BY pe.nombre'
+            ),
+            'categorias' => DB::select('SELECT id_categoria, nombre FROM categoria_producto ORDER BY nombre'),
+            'condiciones' => DB::select('SELECT * FROM condicion_venta WHERE activo = 1 ORDER BY id_condicion_venta'),
+            // El id va junto al nombre: la pantalla manda el id cuando el
+            // producto ya existe, así un espacio de más no termina creando un
+            // producto duplicado y partiendo el stock en dos.
+            //
+            // **Se ofrece el catálogo entero, no sólo lo que este local maneja.**
+            // Comprar es justamente cómo un producto entra por primera vez a una
+            // sucursal: filtrar por lo que ya tiene dejaría fuera lo que se va a
+            // comprar. `compraGuardar` lo habilita acá al confirmar.
+            //
+            // Antes esto filtraba con `Sucursales::filtro('producto', …)`, que
+            // arma `producto.id_sucursal` — columna que la 7.33.0 eliminó al
+            // pasar el catálogo a único. La pantalla contestaba 500 siempre, así
+            // que **no se podía registrar ninguna compra**.
+            // Con el ÚLTIMO precio que se le pagó al proveedor: al elegir un
+            // producto que ya existe, la pantalla lo trae en vez de hacerlo
+            // tipear de memoria. Se puede cambiar — un proveedor sube los
+            // precios y lo que vale es lo que dice la factura de hoy.
+            //
+            // **Y con cuánto hay y cuánto tendría que haber**, que es lo que
+            // dibuja el buscador de la lupa: elegir qué comprar sin ver el
+            // stock obliga a abrir Inventario en otra pestaña y volver.
+            'productos' => DB::select(
+                'SELECT p.id_producto, p.nombre, p.unidad_medida, p.tasa_iva, cp.nombre AS categoria,
+                        COALESCE(fn_producto_stock(p.id_producto, :suc), 0) AS hay,
+                        COALESCE(ps.stock_minimo, 0) AS minimo,
+                        (SELECT dc.precio_unitario FROM detalle_compra dc
+                           JOIN compra c ON c.id_compra = dc.id_compra
+                          WHERE dc.id_producto = p.id_producto
+                          ORDER BY c.fecha DESC, dc.id_detalle_compra DESC LIMIT 1) AS ultimo_precio
+                   FROM producto p
+                   JOIN categoria_producto cp ON cp.id_categoria = p.id_categoria
+                   LEFT JOIN producto_sucursal ps
+                          ON ps.id_producto = p.id_producto AND ps.id_sucursal = :suc2
+                  WHERE p.activo = 1 ORDER BY p.nombre',
+                ['suc' => $suc, 'suc2' => $suc]
+            ),
+            'sel_proveedor' => (int) $request->query('proveedor', 0),
+
+            // **Lo que falta reponer, para venir con la compra ya cargada.**
+            // El botón de Stock dice «Registrar la compra» debajo de una lista
+            // de faltantes: quien lo aprieta espera encontrarlos puestos, no
+            // volver a tipear uno por uno lo que la pantalla acabó de calcular.
+            'reponer' => $request->query('reponer')
+                ? DB::select(
+                    'SELECT v.id_producto, v.nombre, v.faltante, v.precio_costo, p.tasa_iva
+                       FROM vw_producto_bajo_stock v
+                       JOIN producto p ON p.id_producto = v.id_producto
+                      WHERE v.id_sucursal = ? ORDER BY v.faltante DESC', [$suc]
+                )
+                : [],
+        ]);
+    }
+
+    /**
+     * Cargar o corregir el número de factura de una compra ya registrada.
+     *
+     * **El papel no siempre llega con la mercadería.** Se recibe el pedido, se
+     * paga, y la factura del proveedor aparece días después: con el número
+     * pedido sólo al registrar la compra, o se inventaba uno o quedaba en
+     * blanco para siempre.
+     *
+     * No toca ni el total ni el estado: es un dato del respaldo, no de la
+     * operación. Y queda en auditoría porque cambia lo que respalda un egreso.
+     */
+    /**
+     * Los números de factura que ya se anotaron en pagos a ese proveedor.
+     *
+     * **Si al pagar se anotó la factura, no hay por qué volver a tipearla.**
+     * La referencia del pago suele ser justamente el número del papel, así
+     * que se ofrecen como sugerencia y quien carga elige — no se completa
+     * sola, porque una referencia puede ser también un número de operación.
+     */
+    private function facturasDelProveedor(int $idCompra): array
+    {
+        return array_values(array_filter(array_map(
+            fn ($r) => trim((string) $r->referencia),
+            DB::select(
+                'SELECT DISTINCT pp.referencia
+                   FROM compra c
+                   JOIN pago_proveedor pp ON pp.id_proveedor = c.id_proveedor
+                  WHERE c.id_compra = ? AND pp.id_estado_pago_proveedor = 1
+                    AND pp.referencia IS NOT NULL AND TRIM(pp.referencia) <> \'\'
+                  ORDER BY pp.referencia LIMIT 20', [$idCompra]
+            )
+        )));
+    }
+
+    public function compraFactura(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_compra', 0);
+        $nro = trim((string) $request->input('nro_factura_proveedor', ''));
+
+        // **Se vuelve a donde se vino.** Anotando desde la lista lo normal es
+        // tener varios papeles en la mano: mandarla al detalle obliga a
+        // apretar «atrás» entre una y otra, que es lo que este atajo vino a
+        // evitar.
+        $volver = match ($request->input('desde')) {
+            'lista' => redirect()->route('inventario.compras'),
+            // Desde Pagos a proveedores: es donde se alcanza la compra ya
+            // saldada, que salió de «Cuentas por pagar».
+            'pagos' => redirect()->route('facturacion.proveedores'),
+            default => redirect()->route('inventario.compra_ver', ['id' => $id]),
+        };
+
+        $compra = DB::selectOne(
+            'SELECT id_compra, nro_factura_proveedor FROM compra WHERE id_compra = ?', [$id]);
+        if (! $compra) {
+            flash('Esa compra no existe.', 'error');
+
+            return redirect()->route('inventario.compras');
+        }
+
+        if ($nro !== '' && ! preg_match('/^[0-9][0-9-]{2,29}$/', $nro)) {
+            flash('El número de factura va con números y guiones, así: 001-001-0001234.', 'error');
+
+            return $volver;
+        }
+
+        DB::update('UPDATE compra SET nro_factura_proveedor = ? WHERE id_compra = ?',
+            [$nro !== '' ? $nro : null, $id]);
+
+        Auditoria::registrar('MODIFICACION', 'Inventario', 'compra', $id,
+            'Factura del proveedor: ' . ($compra->nro_factura_proveedor ?: 'sin número')
+            . ' → ' . ($nro ?: 'sin número'));
+
+        flash($nro !== '' ? 'Factura ' . $nro . ' anotada en la compra.' : 'Se quitó el número de factura.');
+
+        return $volver;
+    }
+
+    public function compraGuardar(Request $request): RedirectResponse
+    {
+        $idProveedor = (int) $request->input('id_proveedor', 0);
+        $idCondicion = (int) $request->input('id_condicion_venta', 0);
+        $nroFactura = trim((string) $request->input('nro_factura_proveedor', '')) ?: null;
+        $obs = trim((string) $request->input('observaciones', '')) ?: null;
+
+        $nombres = (array) $request->input('nombre', []);
+        $idsProd = (array) $request->input('id_producto', []);   // lo pone el JS al elegir de la lista
+        $cantidades = (array) $request->input('cantidad', []);
+        $precios = (array) $request->input('precio', []);
+        $ivas = (array) $request->input('tasa_iva', []);
+        $categorias = (array) $request->input('categoria', []);
+        // **El descuento del comprobante** (7.127.0): un monto sobre el total,
+        // como lo trae la factura del proveedor. Vacío es cero.
+        $descuento = num($request->input('descuento'));
+        $volver = redirect()->route('inventario.compra_form');
+
+        if (! $idProveedor || ! DB::scalar('SELECT COUNT(*) FROM proveedor WHERE id_proveedor = ? AND activo = 1', [$idProveedor])) {
+            flash('Elegí un proveedor activo.', 'error');
+
+            return $volver->withInput();
+        }
+        if (! $idCondicion || ! DB::scalar('SELECT COUNT(*) FROM condicion_venta WHERE id_condicion_venta = ? AND activo = 1', [$idCondicion])) {
+            flash('Elegí una condición de compra válida.', 'error');
+
+            return $volver->withInput();
+        }
+
+        $catPorDefecto = (int) DB::scalar('SELECT MIN(id_categoria) FROM categoria_producto');
+        $lineas = [];
+        foreach ($nombres as $i => $nom) {
+            $nom = trim((string) $nom);
+            $cant = num($cantidades[$i] ?? 0);
+            $prec = num($precios[$i] ?? 0);
+
+            if ($nom === '' && $cant <= 0) {
+                continue;   // fila vacía
+            }
+            if ($nom === '') {
+                flash('Hay una fila con cantidad pero sin producto.', 'error');
+
+                return $volver->withInput();
+            }
+            if ($cant <= 0) {
+                flash('El producto «' . $nom . '» necesita una cantidad mayor a cero.', 'error');
+
+                return $volver->withInput();
+            }
+            // **El precio no puede quedar vacío.** Antes sólo se rechazaba el
+            // negativo, así que una fila sin precio entraba en cero: la compra
+            // quedaba registrada, el stock subía y el costo del producto se
+            // perdía — y con él la cuenta con el proveedor y cualquier informe
+            // de márgenes. Un producto que entra al depósito costó algo.
+            if ($prec <= 0) {
+                flash('Poné el precio de «' . $nom . '»: sin él la compra entra en cero y '
+                    . 'el costo del producto se pierde.', 'error');
+
+                return $volver->withInput();
+            }
+
+            // **El IVA es del renglón, como en la factura.** Sólo las tres tasas
+            // que existen en Paraguay: otra cosa es un error de carga, y la base
+            // lo rechaza igual con `chk_dc_iva`.
+            $iva = (int) ($ivas[$i] ?? 10);
+            if (! in_array($iva, [0, 5, 10], true)) {
+                flash('El IVA de «' . $nom . '» tiene que ser 10 %, 5 % o exenta.', 'error');
+
+                return $volver->withInput();
+            }
+
+            $lineas[] = [
+                'nombre' => $nom,
+                'id' => (int) ($idsProd[$i] ?? 0),
+                'cantidad' => $cant,
+                'precio' => $prec,
+                'iva' => $iva,
+                'categoria' => (int) ($categorias[$i] ?? 0) ?: $catPorDefecto,
+            ];
+        }
+
+        if (! $lineas) {
+            flash('Agregá al menos un producto con cantidad.', 'error');
+
+            return $volver->withInput();
+        }
+
+        // **El descuento no puede pasarse de los renglones.** Un descuento
+        // mayor que la compra no es un descuento, y con él el total quedaría
+        // en cero o en negativo: la base lo topa en cero (`fn_compra_total`),
+        // pero eso escondería un número mal tipeado.
+        $bruto = 0.0;
+        foreach ($lineas as $l) {
+            $bruto += round($l['cantidad'] * $l['precio'], 2);
+        }
+        if ($descuento < 0) {
+            flash('El descuento no puede ser negativo.', 'error');
+
+            return $volver->withInput();
+        }
+        if ($descuento > $bruto) {
+            flash('El descuento (' . money($descuento) . ') es mayor que los renglones ('
+                . money($bruto) . '): revisá la factura.', 'error');
+
+            return $volver->withInput();
+        }
+
+        // A crédito hay cuotas; al contado no. Sale de la condición elegida,
+        // que es la que dice cuántos días de plazo tiene.
+        $dias = (int) DB::scalar("SELECT dias_credito FROM condicion_venta WHERE id_condicion_venta = ?", [$idCondicion]);
+
+        try {
+            $r = DB::transaction(function () use ($idProveedor, $idCondicion, $nroFactura, $obs, $lineas, $dias, $descuento, $request) {
+                DB::insert(
+                    'INSERT INTO compra (id_sucursal,id_proveedor,id_usuario,id_estado_compra,id_condicion_venta,
+                        nro_factura_proveedor,descuento,observaciones)
+                     VALUES (?,?,?,1,?,?,?,?)',
+                    [Sucursales::activa() ?: 1, $idProveedor, (int) session('uid'),
+                     $idCondicion, $nroFactura, $descuento, $obs]
+                );
+                $idCompra = (int) DB::getPdo()->lastInsertId();
+
+                $creados = [];
+                $total = 0.0;
+
+                foreach ($lineas as $l) {
+                    $idp = 0;
+
+                    // 1) Por id: es lo que manda la pantalla cuando se eligió de la lista
+                    if ($l['id'] > 0) {
+                        $idp = (int) (DB::scalar('SELECT id_producto FROM producto WHERE id_producto = ? LIMIT 1', [$l['id']]) ?: 0);
+                    }
+                    // 2) Por nombre normalizado: espacios de más colapsados y sin
+                    //    distinguir mayúsculas ni tildes (la colación es _ci).
+                    //    Sin esto, «Shampoo  1L» con doble espacio creaba un
+                    //    producto nuevo y partía el stock en dos.
+                    if (! $idp) {
+                        $idp = (int) (DB::scalar(
+                            "SELECT id_producto FROM producto
+                              WHERE TRIM(REGEXP_REPLACE(nombre, '[[:space:]]+', ' ')) = ? LIMIT 1",
+                            [preg_replace('/\s+/u', ' ', trim($l['nombre']))]
+                        ) ?: 0);
+                    }
+                    // 3) Recién ahí es uno nuevo
+                    if (! $idp) {
+                        DB::insert(
+                            // Antes se copiaba el costo como precio de venta, que era
+                            // vender al costo. Va en 0 por lo mismo que en el alta:
+                            // el salón no vende productos.
+                            "INSERT INTO producto (id_categoria,nombre,unidad_medida,precio_costo,precio_venta,tasa_iva)
+                             VALUES (?,?, 'unidad', ?, 0, 10)",
+                            [$l['categoria'], $l['nombre'], $l['precio']]
+                        );
+                        $idp = (int) DB::getPdo()->lastInsertId();
+                        $creados[] = $l['nombre'];
+                    }
+
+                    // Comprar un producto en un local lo habilita en ese local:
+                    // es lo que hace la compra. Sin la fila, `sp_confirmar_compra`
+                    // se cae al generar el movimiento de entrada. Vale también
+                    // para uno del catálogo que este local todavía no manejaba,
+                    // que es justamente el caso de traerlo de otra sucursal.
+                    DB::insert('INSERT IGNORE INTO producto_sucursal (id_producto,id_sucursal) VALUES (?,?)',
+                        [$idp, Sucursales::activa() ?: 1]);
+
+                    DB::insert('INSERT INTO detalle_compra (id_compra,id_producto,cantidad,precio_unitario,tasa_iva) VALUES (?,?,?,?,?)',
+                        [$idCompra, $idp, $l['cantidad'], $l['precio'], $l['iva']]);
+                    $total += round($l['cantidad'] * $l['precio'], 2);
+                }
+                // Lo que se debe es lo del comprobante: los renglones menos su descuento
+                $total = max($total - $descuento, 0);
+
+                // Confirmar genera los movimientos de inventario y actualiza el costo
+                Bd::procedimiento('sp_confirmar_compra', [$idCompra, (int) session('uid')]);
+
+                // Las cuotas, si la compra es a crédito. Una fila por cuota:
+                // nunca una lista de fechas en un solo campo.
+                $cuotas = 0;
+                if ($dias > 0) {
+                    $fechas = (array) $request->input('cuota_fecha', []);
+                    $montos = (array) $request->input('cuota_monto', []);
+                    foreach ($fechas as $i => $fv) {
+                        $fv = trim((string) $fv);
+                        $mo = num($montos[$i] ?? 0);
+                        if ($fv === '' || $mo <= 0) {
+                            continue;
+                        }
+                        $cuotas++;
+                        DB::insert(
+                            'INSERT INTO compra_cuota (id_compra,nro_cuota,fecha_vencimiento,monto) VALUES (?,?,?,?)',
+                            [$idCompra, $cuotas, $fv, $mo]
+                        );
+                    }
+                }
+
+                return ['id' => $idCompra, 'creados' => $creados, 'total' => $total,
+                        'lineas' => count($lineas), 'cuotas' => $cuotas];
+            });
+
+            Auditoria::registrar('COMPRA', 'Inventario', 'compra', $r['id'],
+                $r['lineas'] . ' producto(s), ' . count($r['creados']) . ' nuevo(s)'
+                . ($r['creados'] ? ' (' . implode(', ', $r['creados']) . ')' : '')
+                . ', total ' . money($r['total']));
+
+            flash('Compra registrada por ' . money($r['total']) . ': el stock quedó actualizado.'
+                . ($r['cuotas'] ? ' Quedaron ' . $r['cuotas'] . ' cuota(s) con su vencimiento.' : ''));
+
+            // Se nombran los productos creados: si uno salió de un error de
+            // tipeo, se ve acá y no dentro de tres meses con el stock partido.
+            if ($r['creados']) {
+                flash('Se crearon ' . count($r['creados']) . ' producto(s) nuevo(s): «'
+                    . implode('», «', $r['creados']) . '». Si alguno ya existía con otro nombre, '
+                    . 'unificalos desde Inventario → Productos.', 'warning');
+            }
+        } catch (Throwable) {
+            flash('No se pudo registrar la compra.', 'error');
+
+            return $volver->withInput();
+        }
+
+        return redirect()->route('inventario.compras');
+    }
+
+    // ---------- Altas rápidas ----------
+
+    /** Producto nuevo con su stock inicial, sin salir de «Cargar stock». */
+    public function productoRapido(Request $request): RedirectResponse
+    {
+        $nombre = trim((string) $request->input('nombre', ''));
+        $idCat = (int) $request->input('id_categoria', 0);
+        $unidad = trim((string) $request->input('unidad_medida', 'unidad')) ?: 'unidad';
+        $stock = num($request->input('stock_inicial'));
+        $costo = num($request->input('precio_costo'));
+        // El ajuste a medio cargar vuelve con el borrador: crear un producto no
+        // puede borrar el motivo y las cantidades que ya estaban escritas.
+        $volver = Borrador::conservar(redirect()->route('inventario.ajuste'), $request);
+
+        $error = null;
+        if ($nombre === '') {
+            $error = 'El nombre del producto es obligatorio.';
+        } elseif (! $idCat || ! DB::scalar('SELECT COUNT(*) FROM categoria_producto WHERE id_categoria = ?', [$idCat])) {
+            $error = 'Elegí una categoría válida.';
+        } elseif (DB::scalar('SELECT COUNT(*) FROM producto WHERE nombre = ?', [$nombre])) {
+            $error = 'Ya existe un producto con ese nombre.';
+        } elseif ($stock < 0 || $costo < 0) {
+            $error = 'Las cantidades y los precios no pueden ser negativos.';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver;
+        }
+
+        try {
+            DB::insert(
+                // `precio_venta` va en 0: el salón vende servicios, no productos,
+                // así que el campo salió de la pantalla. La columna es NOT NULL
+                // y sigue en la base por si se revierte la decisión.
+                'INSERT INTO producto (id_categoria,nombre,unidad_medida,precio_costo,precio_venta,tasa_iva,activo)
+                 VALUES (?,?,?,?,0,10,1)', [$idCat, $nombre, $unidad, $costo]
+            );
+            $idp = (int) DB::getPdo()->lastInsertId();
+
+            // Sin esta fila el producto existe en el catálogo y no lo maneja
+            // ningún local: `trg_movinv_bi` rechazaría el stock inicial.
+            DB::insert('INSERT IGNORE INTO producto_sucursal (id_producto,id_sucursal) VALUES (?,?)',
+                [$idp, Sucursales::activa() ?: 1]);
+
+            if ($stock > 0) {
+                Bd::procedimiento('sp_registrar_movimiento_inventario', [
+                    $idp, Sucursales::activa() ?: 1, (int) session('uid'), self::STOCK_INICIAL, $stock, $costo,
+                    'ALTA', 'Stock inicial (alta directa, sin compra)',
+                ]);
+            }
+
+            Auditoria::registrar('ALTA', 'Inventario', 'producto', $idp, $nombre . ' (alta rápida)');
+            flash('Producto «' . $nombre . '» creado'
+                . ($stock > 0 ? ' con ' . cant($stock) . ' ' . $unidad . ' de stock.' : '.'));
+
+            // Se vuelve al ajuste con el producto ya elegido: llevarlo a Stock lo
+            // sacaba de la pantalla y le hacía perder lo que estaba cargando.
+            return redirect()->route('inventario.ajuste', ['producto' => $idp]);
+        } catch (Throwable) {
+            flash('No se pudo crear el producto.', 'error');
+
+            return $volver;
+        }
+    }
+
+    /** Proveedor nuevo sin salir de «Nueva compra». */
+    public function proveedorRapido(Request $request): RedirectResponse
+    {
+        $d = [
+            'nombre' => trim((string) $request->input('nombre', '')),
+            'ruc' => trim((string) $request->input('ruc', '')) ?: null,
+            'telefono' => trim((string) $request->input('telefono', '')) ?: null,
+        ];
+        $contacto = trim((string) $request->input('contacto', '')) ?: null;
+        // Las filas de la compra ya cargadas vuelven con el borrador.
+        $volver = Borrador::conservar(redirect()->route('inventario.compra_form'), $request);
+
+        if ($d['nombre'] === '') {
+            flash('El nombre o razón social del proveedor es obligatorio.', 'error');
+
+            return $volver->withInput();
+        }
+
+        // Si el RUC ya está cargado puede ser la misma empresa registrada de
+        // otra forma: se avisa en vez de crear un duplicado.
+        $idPersona = Persona::porDocumento(null, $d['ruc']);
+        if ($idPersona && DB::scalar('SELECT COUNT(*) FROM proveedor WHERE id_persona = ?', [$idPersona])) {
+            $ya = (int) DB::scalar('SELECT id_proveedor FROM proveedor WHERE id_persona = ? LIMIT 1', [$idPersona]);
+            flash('Ya existe un proveedor con ese RUC: lo dejamos elegido.', 'warning');
+
+            return redirect()->route('inventario.compra_form', ['proveedor' => $ya]);
+        }
+
+        try {
+            $idPersona = Persona::guardar($idPersona, $d);
+            DB::insert('INSERT INTO proveedor (id_persona, contacto, activo) VALUES (?,?,1)', [$idPersona, $contacto]);
+            $idp = (int) DB::getPdo()->lastInsertId();
+            Auditoria::registrar('ALTA', 'Inventario', 'proveedor', $idp,
+                $d['nombre'] . ' (alta rápida desde Nueva compra)');
+            flash('Proveedor «' . $d['nombre'] . '» creado y seleccionado.');
+
+            return redirect()->route('inventario.compra_form', ['proveedor' => $idp]);
+        } catch (Throwable) {
+            flash('No se pudo crear el proveedor (¿RUC duplicado?).', 'error');
+
+            return $volver->withInput();
+        }
+    }
+
+    // -----------------------------------------------------------------
+
+    private function categoriasPorNombre(): array
+    {
+        $out = [];
+        foreach (DB::select('SELECT nombre FROM categoria_producto ORDER BY nombre') as $c) {
+            $out[$c->nombre] = $c->nombre;
+        }
+
+        return $out;
+    }
+
+
+
+    private function estadosCompra(): array
+    {
+        $out = [];
+        foreach (DB::select('SELECT nombre FROM estado_compra ORDER BY id_estado_compra') as $e) {
+            $out[$e->nombre] = $e->nombre;
+        }
+
+        return $out;
+    }
+}

@@ -1,0 +1,196 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Controllers;
+
+use App\Servicios\Caja;
+use App\Servicios\Cuenta;
+use App\Servicios\Permisos;
+use App\Servicios\Sucursales;
+use Illuminate\Support\Facades\DB;
+use Illuminate\View\View;
+
+/**
+ * El panel principal: por dónde se entra a todo lo demás.
+ *
+ * Muestra las próximas citas, el resumen financiero —cuántas cajas hay
+ * abiertas, cuántas cuentas bancarias y lo cobrado hoy contra ayer— y las tarjetas de los módulos que el rol puede
+ * abrir. Lo que hay que resolver ahora va en la campanita, no acá.
+ */
+class PanelController extends Controller
+{
+    public function index(): View
+    {
+        $hoy = date('Y-m-d');
+        $todaLaAgenda = Permisos::veTodaLaAgenda();
+
+        // **Cada número se muestra sólo a quien tiene el módulo del que sale**
+        // (SE-01). Antes se calculaban sin filtrar y la vista los dibujaba
+        // siempre, así que una empleada entraba y veía cuánto facturó el salón
+        // hoy. Es la misma fuga que la 7.13.1 corrigió para la barra de caja:
+        // ahí se arregló la barra y no las métricas de al lado.
+        //
+        // Las citas siguen la regla de siempre —`veTodaLaAgenda()`, que es la
+        // que comparten la agenda y las próximas citas—: quien no administra la
+        // agenda ve las suyas, y el rótulo lo dice.
+
+        // **«Citas hoy», «Clientes activos» y «Falta stock» salieron del panel**
+        // (pedido del usuario, 7.117.0 y 7.118.0). Eran números que no pedían
+        // ninguna acción: cuántas citas hay ya lo dice la lista de al lado,
+        // cuántas fichas hay no dice qué hacer hoy, y el faltante de stock
+        // pasa a la campanita —`Alertas::faltaStock()`—, con los nombres y el
+        // enlace, que es lo que un número suelto no daba.
+        $metricas = [
+            // **Los ingresos son los de ESTE local, no los del negocio entero.**
+            // Era la única métrica del panel que no filtraba por sucursal: las
+            // citas, el stock y la caja ya lo hacían, así que la sede 2 veía la
+            // plata de la sede 1 en su propia pantalla de inicio.
+            //
+            // La sucursal del cobro sale de su caja, que es donde entró; los
+            // pocos que pudieran no tenerla —una seña vieja— se ubican por la
+            // cita. Sin caja abierta no se cobra, así que en la práctica siempre
+            // hay una.
+            'ingresos_hoy' => Permisos::puede('facturacion.cobros') ? $this->cobradoEl($hoy) : null,
+            // **Y contra ayer**, que es lo que le da sentido al número de hoy:
+            // Gs. 400.000 a media mañana es poco o mucho según lo que se cobró
+            // el día anterior a la misma hora... o el día entero, que es lo
+            // que se compara acá y lo que la maqueta pide: «↑ % vs ayer».
+            'ingresos_ayer' => Permisos::puede('facturacion.cobros')
+                ? $this->cobradoEl(date('Y-m-d', strtotime($hoy . ' -1 day')))
+                : null,
+        ];
+
+        // Las próximas citas son LAS SUYAS, salvo que administre la agenda del
+        // salón. Sin este filtro una profesional entraba y veía las citas de
+        // sus compañeras: la misma regla que ya aplicaba la agenda no estaba
+        // acá, así que el panel las mostraba todas.
+        // `vw_agenda_citas` NO trae `id_usuario` —sólo el nombre del
+        // profesional—, así que se une con `cita` para poder filtrar, igual
+        // que hace la agenda.
+        $parProx = [];
+        $soloMiasProx = '';
+        if (! $todaLaAgenda) {
+            // Mismo criterio que la agenda: una cita repartida es de las dos
+            // que la atienden, no sólo de la que la tiene a su nombre.
+            $soloMiasProx = ' AND (c.id_usuario = :yo1
+                                   OR EXISTS (SELECT 1 FROM cita_servicio cs0
+                                               WHERE cs0.id_cita = c.id_cita AND cs0.id_usuario = :yo2))';
+            $parProx['yo1'] = $parProx['yo2'] = (int) session('uid');
+        }
+        $soloMiasProx .= Sucursales::filtro('c', $parProx);
+
+        // **Cuatro y no seis.** El panel es la puerta de entrada y lo que tiene
+        // que resolver es «¿a dónde voy?»: las tarjetas de módulo son lo
+        // principal, y dos tablas largas apiladas encima las empujaban fuera de
+        // la pantalla. Cuatro alcanzan para saber qué se viene; para el resto
+        // está la agenda, que es la pantalla que existe justamente para eso.
+        // **Próxima es la que todavía hay que atender, no la que todavía no
+        // llegó a su hora.** Esta consulta era el único lugar del sistema que
+        // listaba los estados a mano —«todos menos Cancelada y Ausente»— y la
+        // lista se quedó corta: **Atendida entraba**. A una clienta atendida
+        // temprano, con su hora todavía por delante, el panel la seguía
+        // anunciando como pendiente; quien lo mira decide con eso si le da
+        // tiempo de tomar otra.
+        //
+        // La regla ya vivía en la base, en una columna hecha para eso, y la
+        // usan la agenda, el portal, los recordatorios y la reasignación:
+        // `estado_cita.bloquea_agenda` es exactamente «esta cita todavía
+        // ocupa el sillón». Escrita una sola vez no se puede quedar corta al
+        // agregar un estado, que es lo que pasó con Atrasada en la 7.15.0.
+        $proximas = DB::select(
+            "SELECT v.* FROM vw_agenda_citas v
+               JOIN cita c        ON c.id_cita = v.id_cita
+               JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+              WHERE v.fecha_hora >= NOW() AND ec.bloquea_agenda = 1 $soloMiasProx
+              ORDER BY v.fecha_hora LIMIT 4", $parProx
+        );
+
+        // Las atrasadas van en su propio bloque, no mezcladas con las próximas.
+        //
+        // Son las que ya pasaron de hora y nadie puso En proceso: el sistema no
+        // decide que la clienta no vino —eso lo sabe quien atiende—, sólo las
+        // junta para que alguien las mire y las marque. Sin este bloque había
+        // que ir a la agenda del día y buscarlas a ojo, y una cita atrasada de
+        // ayer no la miraba nadie nunca más.
+        //
+        // Se filtran con la MISMA regla que las próximas: quien no administra
+        // la agenda del salón ve sólo las suyas.
+        $atrasadas = DB::select(
+            "SELECT v.* FROM vw_agenda_citas v
+               JOIN cita c ON c.id_cita = v.id_cita
+              WHERE v.estado = 'Atrasada' $soloMiasProx
+              ORDER BY v.fecha_hora LIMIT 4", $parProx
+        );
+
+        // **El total va aparte de la lista, y tiene que ser el de verdad.**
+        // Mostrar «4» cuando hay once no es resumir, es informar mal: quien lee
+        // el panel decide con ese número si tiene que ir a la agenda ahora.
+        $atrasadasTotal = (int) DB::scalar(
+            "SELECT COUNT(*) FROM vw_agenda_citas v
+               JOIN cita c ON c.id_cita = v.id_cita
+              WHERE v.estado = 'Atrasada' $soloMiasProx", $parProx
+        );
+
+        // **La caja, sólo a quien tiene la caja.** Antes se preguntaba por el
+        // módulo padre `facturacion`, y eso lo cumple cualquiera que tenga
+        // ALGÚN submódulo —así resuelve la jerarquía—: a quien le sacaban la
+        // caja le seguía apareciendo la barra con el saldo del salón.
+        $verCaja = Permisos::puede('facturacion.caja');
+
+        // **Cuántas, no cuáles** (7.122.0, pedido del usuario). La 7.115.1
+        // listaba cada caja abierta con su responsable y su saldo, y la
+        // 7.121.1 le sumó cada cuenta bancaria: con más cajones y más cuentas
+        // la tarjeta crecía sin tope y saturaba el resumen. Quedan dos
+        // números —cajas abiertas y cuentas bancarias activas— cada uno con
+        // su acceso a la pantalla que tiene el resto. **Lo que se conserva de
+        // la 7.115.1** es que el número es el mismo para todos: son TODAS las
+        // del local, no la que abrió quien mira.
+        $cajasAbiertas = $verCaja ? count(Caja::abiertasDe()) : 0;
+
+        // Y las cuentas bancarias activas del local: desde la 7.121.0 la
+        // cuenta es la caja del banco, así que el estado financiero son las
+        // dos cosas. Va a quien ve la caja —es la misma pregunta, «¿cuánta
+        // plata hay?»—; el enlace, a quien administra las cuentas.
+        $suc = (int) Sucursales::activa();
+        $cuentasActivas = $verCaja && $suc
+            ? (int) DB::scalar('SELECT COUNT(*) FROM cuenta_bancaria WHERE id_sucursal = ? AND activo = 1', [$suc])
+            : 0;
+
+        // **Lo que falta CARGAR ya no se arma acá**: desde la 7.117.0 vive
+        // dentro de la campanita de la barra, por pedido del usuario, así que
+        // lo pide el layout —`Pendientes::mios()`— y se ve desde cualquier
+        // pantalla y no sólo desde el inicio.
+
+        return view('panel', [
+            'm' => $metricas,
+            'proximas' => $proximas,
+            'atrasadas' => $atrasadas,
+            'atrasadasTotal' => $atrasadasTotal,
+            'verTodo' => $todaLaAgenda,
+            'cajasAbiertas' => $cajasAbiertas,
+            'cuentasActivas' => $cuentasActivas,
+            'verCaja' => $verCaja,
+        ]);
+    }
+
+    /**
+     * Lo cobrado un día en este local: la sucursal del cobro sale de su caja,
+     * que es donde entró; los pocos que pudieran no tenerla —una seña vieja— se
+     * ubican por la cita.
+     */
+    private function cobradoEl(string $dia): float
+    {
+        $suc = Sucursales::activa();
+
+        return (float) DB::scalar(
+            'SELECT COALESCE(SUM(co.monto),0)
+               FROM cobro co
+               LEFT JOIN caja k ON k.id_caja = co.id_caja
+               LEFT JOIN cita ci ON ci.id_cita = co.id_cita
+              WHERE DATE(co.fecha) = :d AND co.id_estado_cobro = 1
+                AND (:s = 0 OR COALESCE(k.id_sucursal, ci.id_sucursal) = :s2)',
+            ['d' => $dia, 's' => $suc, 's2' => $suc]
+        );
+    }
+}

@@ -1,0 +1,184 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Los cuatro niveles de navegación del sistema, en un solo lugar.
+ *
+ * Cada nivel contesta una pregunta distinta, y si se saca alguno la anterior
+ * vuelve a quedar sin respuesta:
+ *
+ *   · barra de módulos  → ¿a qué otro módulo voy?
+ *   · migas de pan      → ¿dónde estoy y cómo vuelvo?
+ *   · tarjetas          → ¿qué hay dentro de este módulo?
+ *   · accesos rápidos   → ¿qué suelo hacer después de esto?
+ *
+ * Las migas y los accesos rápidos salen solos de acá: ninguna vista los
+ * declara, así no se desfasan cuando se renombra una pantalla.
+ */
+return [
+
+    // -----------------------------------------------------------------
+    //  Tarjetas del panel de gestión. Cada una declara el módulo que la
+    //  habilita; el rol que no lo tenga, no la ve.
+    // -----------------------------------------------------------------
+    'modulos' => [
+        ['mod' => 'citas',         'ruta' => 'citas.index',         'ic' => 'calendar-event', 'titulo' => 'Citas',     'sub' => 'Calendario · Nueva cita · Estados · Ausencias'],
+        ['mod' => 'clientes',      'ruta' => 'clientes.index',      'ic' => 'people',         'titulo' => 'Clientes',           'sub' => 'Registro · Historial · Preferencias · Valoraciones'],
+        ['mod' => 'servicios',     'ruta' => 'servicios.index',     'ic' => 'scissors',       'titulo' => 'Servicios',          'sub' => 'Catálogo · Categorías · Descuentos · Promos'],
+        ['mod' => 'inventario',    'ruta' => 'inventario.index',    'ic' => 'box-seam',       'titulo' => 'Inventario',         'sub' => 'Productos · Categorías · Stock · Compras'],
+        ['mod' => 'facturacion',   'ruta' => 'facturacion.index',   'ic' => 'cash-stack',     'titulo' => 'Tesorería', 'sub' => 'Cobros · Facturas · Caja · Timbrados'],
+        ['mod' => 'reportes',      'ruta' => 'reportes.index',      'ic' => 'bar-chart',      'titulo' => 'Reportes',           'sub' => 'Servicios top · Demanda · Ingresos'],
+        // **Seguridad se partió en tres**, por pedido del usuario. Cada una
+        // contesta una pregunta distinta y juntas obligaban a buscar los
+        // turnos en el mismo lugar que la auditoría. Las tres conservan el
+        // fondo oscuro, que las separa de la operación diaria del salón.
+        ['mod' => 'personal',      'ruta' => 'seguridad.personal.index',      'ic' => 'person-badge',   'titulo' => 'Personal',           'sub' => 'Turnos · Asistencia · Comisiones', 'dark' => true],
+        ['mod' => 'seguridad',     'ruta' => 'seguridad.index',     'ic' => 'shield-lock',    'titulo' => 'Seguridad',          'sub' => 'Usuarios · Roles · Auditoría', 'dark' => true],
+        ['mod' => 'configuracion', 'ruta' => 'seguridad.configuracion.index', 'ic' => 'sliders',        'titulo' => 'Configuración',      'sub' => 'Ajustes · Sucursales · Contacto', 'dark' => true],
+    ],
+
+    // -----------------------------------------------------------------
+    //  Catálogo de pantallas: etiqueta, ícono y CLAVE DEL PERMISO.
+    //
+    //  La clave del permiso tiene que ser la misma que pide el middleware de
+    //  la pantalla: de acá salen los accesos rápidos, y un atajo hacia algo
+    //  que el rol no puede abrir es peor que no ofrecerlo.
+    // -----------------------------------------------------------------
+    'pantallas' => [
+        'citas.agenda'              => ['Agenda',                'calendar-week',      'citas.agenda'],
+        'citas.form'                => ['Nueva cita',            'calendar-plus',      'citas.agenda'],
+        'citas.atender'             => ['Registrar atención',    'clipboard-check',    'citas.atencion', false],
+        'citas.ausencias'           => ['Excepciones',           'calendar-x',         'citas.ausencias'],
+        'citas.reasignar'           => ['Reasignar citas',       'arrow-left-right',   'citas.agenda', false],
+        'clientes.lista'            => ['Clientes',              'people',             'clientes.registro'],
+        'clientes.form'             => ['Nuevo cliente',         'person-plus',        'clientes.registro', false],
+        'clientes.historial'        => ['Historial',             'clock-history',      'clientes.registro', false],
+        // **«Visitas y puntos» es de CLIENTES, y vuelve acá** (pedido del
+        // usuario). La 7.107.0 la mudó a Promociones con el argumento de que
+        // contesta la misma pregunta que los descuentos, y eso mezcló dos
+        // jerarquías: la pantalla lista **personas** —quién junta cuántos
+        // puntos, en qué nivel está, qué canjeó— y buscar a una clienta dentro
+        // de Servicios no se le ocurre a nadie.
+        //
+        // **Lo que SÍ se queda en Promociones son los parámetros**: desde
+        // cuántas visitas arranca cada nivel, qué descuento le toca y cuántos
+        // guaraníes vale un punto. Ésa es la distinción que ordena las dos —
+        // *fijar la regla* es de Servicios, *mirar a quién le tocó* es de
+        // Clientes— y es la misma por la que el catálogo vive en Servicios y
+        // las citas en Citas.
+        //
+        // **La URL y el permiso no se tocan**, que ya eran de Clientes: lo
+        // único que cambia es de dónde se llega.
+        'clientes.fidelizacion'     => ['Visitas y puntos',      'award',              'clientes.fidelizacion'],
+        'clientes.canjes'           => ['Canjes por puntos',     'gift',               'clientes.canjes'],
+        'clientes.valoraciones'     => ['Valoraciones',          'star',               'clientes.valoraciones'],
+        'servicios.lista'           => ['Servicios',             'scissors',           'servicios.catalogo'],
+        'servicios.categorias'      => ['Categorías',            'tags',               'servicios.categorias'],
+        'servicios.zonas'           => ['Zonas del cuerpo',      'person-arms-up',     'servicios.categorias'],
+        'servicios.descuentos'      => ['Promociones',           'percent',            'servicios.descuentos'],
+        'inventario.productos'      => ['Productos',             'box-seam',           'inventario.productos'],
+        'inventario.categorias'     => ['Categorías',            'tags',               'inventario.productos'],
+        'inventario.stock'          => ['Stock',                 'clipboard-data',     'inventario.stock'],
+        'inventario.movimientos'    => ['Movimientos',           'arrow-left-right',   'inventario.stock'],
+        'inventario.ajuste'         => ['Cargar stock',          'plus-slash-minus',   'inventario.stock', false],
+        'inventario.compras'        => ['Compras',               'bag',                'inventario.compras'],
+        'inventario.compra_form'    => ['Nueva compra',          'bag-plus',           'inventario.compras', false],
+        'inventario.proveedores'    => ['Proveedores',           'truck',              'inventario.proveedores'],
+        'facturacion.timbrados'     => ['Timbrados',             'file-earmark-text',  'facturacion.timbrados', true, 'Facturación'],
+        'facturacion.facturas'      => ['Facturas',              'receipt',            'facturacion.facturas', true, 'Facturación'],
+        'facturacion.factura_ver'   => ['Ver comprobante',       'file-earmark-text',  'facturacion.facturas', false],
+        'facturacion.emitir'        => ['Emitir factura',        'receipt-cutoff',     'facturacion.facturas', false],
+        'facturacion.receptor'      => ['Datos para la factura', 'person-vcard',       'facturacion.facturas', false],
+        'facturacion.cobros'        => ['Cobros',                'cash-coin',          'facturacion.cobros', true, 'Cobros'],
+        'facturacion.cajas'         => ['Cajas',                 'safe',               'facturacion.caja', true, 'Caja'],
+        'facturacion.caja_ver'      => ['Ver la caja',           'safe',               'facturacion.caja', false, 'Caja'],
+        'facturacion.arqueo'        => ['Arqueos',               'clipboard-check',    'facturacion.caja', true, 'Caja'],
+        // **La cuenta bancaria es una caja dedicada al banco** (7.121.0), y
+        // por eso va en el grupo Caja: lo que entra por transferencia se suma
+        // y lo que sale se resta, con su arqueo. Era «Datos de pago», en
+        // Configuración.
+        'facturacion.cuentas'       => ['Cuenta bancaria',       'bank',               'facturacion.cuentas', true, 'Caja'],
+        // «Movimientos» a secas: lista lo del cajón Y lo de la cuenta.
+        'facturacion.movimientos'   => ['Movimientos',           'arrow-left-right',   'facturacion.movimientos', true, 'Caja'],
+        'facturacion.pagos'         => ['Pagos al profesional',  'wallet2',            'facturacion.pagos', true, 'Pagos'],
+        'facturacion.proveedores'   => ['Pagos a proveedores',   'truck',              'facturacion.proveedores', true, 'Pagos'],
+        'reportes.index'            => ['Reportes',              'bar-chart',          'reportes'],
+        'reportes.imprimir'         => ['Informe para imprimir', 'printer',            'reportes', false],
+        'seguridad.usuarios'        => ['Usuarios',              'person-badge',       'seguridad.usuarios'],
+        'seguridad.profesionales'   => ['Profesionales',         'people',             'personal.profesionales'],
+        'seguridad.profesional_form' => ['Nuevo profesional',    'person-plus',        'personal.profesionales', false],
+        'seguridad.usuario_form'    => ['Nuevo usuario',         'person-plus',        'seguridad.usuarios', false],
+        'seguridad.roles'           => ['Roles',                 'shield-check',       'seguridad.roles'],
+        'seguridad.turnos'          => ['Turnos',                'clock',              'personal.turnos'],
+        'seguridad.asistencia'      => ['Asistencia',            'calendar-check',     'personal.asistencia'],
+        'seguridad.comisiones'      => ['Comisiones',            'percent',            'personal.comisiones'],
+        // **Ajustes: cómo se presenta y cómo se ve el sistema** (7.125.0). El
+        // nombre, el logo, el color, la letra y los datos fiscales salieron
+        // de Sucursales, que los cargaba encima de la lista de locales.
+        'seguridad.ajustes'         => ['Ajustes',               'gear',               'configuracion.ajustes'],
+        'seguridad.sucursales'      => ['Sucursales',            'shop',               'configuracion.sucursales'],
+        'seguridad.contacto'        => ['Contacto',                'headset',            'configuracion.contacto'],
+        // **Correo del sistema: SÓLO el Administrador, y por eso el SEXTO
+        // valor.** No tiene submódulo propio —a propósito, para que no se
+        // pueda dar a otro rol desde Roles— y lo guarda el middleware `admin`.
+        // El permiso declarado es el módulo padre, que es lo que dice DÓNDE
+        // vive (la miga, el activo de la barra); el `true` del final es lo que
+        // dice QUIÉN la ve: `pantallasDe()` la salta si no es el Administrador.
+        //
+        // Hasta la 7.115.1 no estaba acá: la tarjeta se agregaba a mano en la
+        // landing y el desplegable de la barra no la mostraba — se reportó
+        // como «Correo del sistema no está en la barra de navegación».
+        'seguridad.correo_sistema'  => ['Correo del sistema',    'envelope-at',        'configuracion', true, '', true],
+        'seguridad.auditoria'       => ['Auditoría',             'journal-text',       'seguridad.auditoria'],
+    ],
+
+    // -----------------------------------------------------------------
+    //  Pantallas PRESTADAS a otro módulo
+    // -----------------------------------------------------------------
+    //  Una pantalla pertenece al módulo de su permiso, y con eso alcanza
+    //  para casi todas. El mecanismo existe para la excepción: cuando una
+    //  pantalla se necesita desde dos módulos, se declara acá con el título
+    //  con el que se la nombra en el otro.
+    //
+    //  **Hoy no lo usa nadie.** Lo usaba la ficha del equipo, que abría
+    //  `seguridad.usuarios` y era además donde Personal cargaba a la gente;
+    //  desde la 7.68.0 Profesionales tiene su propia pantalla y su propio
+    //  permiso, así que no hay nada que prestar. El arreglo queda vacío en
+    //  vez de borrarse: el mecanismo sigue siendo correcto y la próxima
+    //  pantalla compartida lo va a necesitar.
+    'tambien' => [
+        // Vacío a propósito: «Visitas y puntos» volvió a Clientes en la
+        // 7.110.0, que es su módulo de siempre. El mecanismo se conserva —la
+        // próxima pantalla compartida lo va a necesitar.
+    ],
+
+    // -----------------------------------------------------------------
+    //  Secciones del portal, para el pie cuando quien mira es una clienta
+    // -----------------------------------------------------------------
+    // Las secciones de la clienta. Alimentan **la barra de arriba y el pie**:
+    // hasta la 7.37.1 sólo el pie, así que para pasar de «Reservar» a «Mis
+    // citas» había que bajar hasta el final de la página. El personal tenía
+    // tres niveles de navegación y la clienta ninguno, justo en la parte del
+    // sistema que usa gente sin entrenamiento.
+    //
+    // «Mi cuenta» y «Mis recordatorios» quedan sólo en el pie y en el
+    // desplegable de la cuenta —que es donde se los busca—: en la barra
+    // competirían con lo que la clienta viene a hacer, que es reservar.
+    'portal' => [
+        ['ruta' => 'portal.index',        'titulo' => 'Inicio',         'ic' => 'house-door', 'barra' => true],
+        ['ruta' => 'portal.reservar',     'titulo' => 'Reservar cita',  'ic' => 'calendar-plus', 'barra' => true],
+        ['ruta' => 'portal.citas',        'titulo' => 'Mis citas',      'ic' => 'calendar-week', 'barra' => true],
+        ['ruta' => 'portal.promociones',  'titulo' => 'Promociones',    'ic' => 'gift',          'barra' => true],
+        ['ruta' => 'portal.valoraciones', 'titulo' => 'Valoraciones',   'ic' => 'star',          'barra' => true],
+        // **En la barra, y eso es lo que faltaba.** El campo de alergias existe
+        // desde la 7.110.0 y se reportó igual que «no existe en ninguna parte
+        // para cargar alergias»: sin `barra` esta pantalla sólo salía en el pie
+        // y en el desplegable de la cuenta, o sea en dos lugares donde nadie la
+        // busca. Una función que no se encuentra es indistinguible de una que
+        // no está — el mismo problema que `sgp:pendientes` tuvo en la 7.61.0.
+        ['ruta' => 'portal.ficha',        'titulo' => 'Mi ficha',       'ic' => 'person-vcard', 'barra' => true],
+        ['ruta' => 'portal.preferencias', 'titulo' => 'Mis recordatorios', 'ic' => 'bell'],
+        ['ruta' => 'cuenta.index',        'titulo' => 'Mi cuenta',      'ic' => 'gear'],
+    ],
+];

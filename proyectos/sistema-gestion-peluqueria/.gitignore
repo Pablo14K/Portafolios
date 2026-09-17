@@ -1,0 +1,59 @@
+*.log
+.DS_Store
+.env
+.env.backup
+.env.production
+.phpactor.json
+.phpunit.result.cache
+/.claude
+/.codex
+/.cursor/
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+_ide_helper.php
+Homestead.json
+Homestead.yaml
+Thumbs.db
+
+# La salida del banco de pruebas de QA, no el banco.
+# `_sim/` y `_sim60/` son la herramienta y se versionan; sus `log/` son lo que
+# escupe una corrida —megas de operaciones crudas— y envejecen al día
+# siguiente. El resultado que sí importa está en el informe, que sí se commitea.
+_sim/log/
+_sim60/log/
+_sim30/log/
+
+# El banco adversario se versiona; sus corridas no.
+_qa/log/
+
+# **`docker/php/secretos.env` YA NO se ignora, y es una decisión, no un olvido.**
+#
+# El VPS se despliega desde el Administrador de Docker de Hostinger, que clona el
+# repositorio en un temporal NUEVO en cada despliegue: un archivo dejado a mano en
+# el servidor no sobrevive al siguiente. O el archivo está versionado, o MariaDB
+# arranca sin contraseña y se apaga.
+#
+# Lo que eso cuesta está escrito en DESPLIEGUE.md, punto 2: las credenciales quedan
+# legibles para cualquiera que abra el repositorio y no se pueden borrar del
+# historial. **Con el repositorio público hay que darlas por comprometidas y
+# rotarlas después de desplegar.**
+#
+# Si algún día se vuelve al camino de la consola web, esta línea vuelve:
+#   docker/php/secretos.env
+
+# Los respaldos de la base del servidor. Son datos de un salón real: no van al
+# repositorio ni por accidente. La carpeta sí, para que exista.
+respaldos/*
+!respaldos/.gitkeep

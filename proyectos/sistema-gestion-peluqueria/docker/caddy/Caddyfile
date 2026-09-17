@@ -1,0 +1,87 @@
+# El servidor HTTP del contenedor `web`. **Ya no hace TLS ni saca certificados:
+# de eso se ocupa Traefik**, que es el proxy del VPS y escucha el 80 y el 443.
+#
+# Por qué sigue habiendo un Caddy en el medio, que es la pregunta obvia:
+# **Traefik habla HTTP y php-fpm habla FastCGI**, así que no se pueden conectar
+# directamente. Hace falta algo que traduzca, y de paso sirva los archivos
+# estáticos —el CSS, el JS, las fotos— sin molestar a PHP. Ese es este Caddy.
+#
+#   navegador --HTTPS--> Traefik --HTTP--> Caddy --FastCGI--> php-fpm
+#
+# Traefik decide a qué proyecto mandar cada pedido mirando el dominio, así que
+# acá no hace falta volver a mirarlo: se escucha en el 80 y punto.
+
+{
+	# Sin esto Caddy intentaría sacar su propio certificado para cualquier
+	# nombre que le llegue, y ni siquiera puede: no publica el 80 al mundo.
+	auto_https off
+
+	# **Sin esto, Laravel arma los enlaces en `http://`.** Traefik manda
+	# `X-Forwarded-Proto: https`, pero Caddy la REESCRIBE con el esquema de la
+	# conexión que él recibió —que es HTTP en claro— y le pasa `http` a PHP.
+	# Comprobado: la cabecera llegaba como `http` aunque el proxy mandara
+	# `https`.
+	#
+	# `trusted_proxies` le dice a Caddy que a un origen de red privada le puede
+	# creer, así que conserva las `X-Forwarded-*` que vienen de Traefik en vez
+	# de inventarlas. Recién ahí el `trustProxies` de Laravel tiene algo que
+	# creer.
+	#
+	# **Sólo rangos privados**: confiar en cualquier origen dejaría que un
+	# visitante mintiera sobre el esquema y sobre su propia IP.
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	# **La raíz es `public/`, nunca la del proyecto.** Es la regla que más caro
+	# se paga si se equivoca: apuntando a la raíz, el `.env` con la contraseña
+	# de la base queda descargable por HTTP.
+	root * /app/public
+
+	encode zstd gzip
+
+	php_fastcgi app:9000 {
+		root /app/public
+	}
+
+	file_server
+
+	# **Lo que hay bajo /assets se guarda en el navegador un año.** Todo lo
+	# que el sistema enlaza ahí lleva `?v=<fecha del archivo>` (`recurso()`),
+	# así que la URL cambia cuando cambia el archivo y una caché larga no
+	# puede servir nada viejo. Sin esto Caddy no mandaba `Cache-Control`, y
+	# el navegador volvía a pedir la foto de perfil en cada pantalla — que es
+	# el segundo de avatar vacío que se reportó al entrar.
+	@estatico path /assets/*
+	header @estatico Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		# HSTS lo manda igual: quien lo lee es el navegador, y la conexión que
+		# ve el navegador SÍ es HTTPS —la que termina en Traefik—.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Nada de este sistema tiene por qué dibujarse dentro de un iframe
+		# ajeno: es la defensa contra el clickjacking sobre los botones que
+		# anulan comprobantes.
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Un intento de bajar cualquiera de estos es alguien tanteando, no un
+	# error: la raíz ya es public/, así que ni siquiera están acá adentro.
+	# Se contesta 404 y no 403, que un 403 confirma que el archivo existe.
+	@prohibido {
+		path /.env* /.git/* /*.sql /composer.json /composer.lock
+	}
+	respond @prohibido 404
+
+	log {
+		output file /var/log/caddy/sgp.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

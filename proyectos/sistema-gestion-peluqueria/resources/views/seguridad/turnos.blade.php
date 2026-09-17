@@ -1,0 +1,121 @@
+@extends('layout.app')
+
+@section('titulo', 'Turnos')
+
+@section('contenido')
+    <x-encabezado sub="El turno es una <strong>plantilla</strong>, no una fecha: un nombre, un horario y los días de la semana en que se trabaja. Se define una vez y se le asigna a cada persona desde su ficha." />
+
+    <div class="row g-3">
+        <div class="col-lg-5">
+            <div class="sgp-panel">
+                <h2 class="sgp-form-titulo mb-2"><i class="bi bi-clock"></i> Nuevo turno</h2>
+                @include('seguridad._turno_form', ['t' => null])
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="sgp-panel">
+                <div class="table-responsive sgp-tabla-movil">
+                    <table class="table align-middle mb-0">
+                        <thead>
+                            <tr><th>Turno</th><th>Horario</th><th>Días</th>
+                                <th class="text-end">Acciones</th></tr>
+                        </thead>
+                        <tbody>
+                            @forelse ($rows as $t)
+                                <tr>
+                                    <td class="sgp-movil-titulo" data-label="Turno">
+                                        {{ $t->nombre }}
+                                        <div class="text-muted-warm" style="font-size:.76rem">{{ $t->sucursal }}</div>
+                                    </td>
+                                    <td style="white-space:nowrap" data-label="Horario">
+                                        {{ substr((string) $t->hora_inicio, 0, 5) }}
+                                        a {{ substr((string) $t->hora_fin, 0, 5) }}
+                                    </td>
+                                    <td class="text-muted-warm" style="font-size:.82rem" data-label="Días">{{ $t->dias_texto }}</td>
+                                    <td class="text-end sgp-movil-acciones" style="white-space:nowrap">
+                                        <button class="sgp-btn-detalle" data-bs-toggle="collapse"
+                                                data-bs-target="#detTurno{{ $t->id_turno }}" aria-expanded="false">
+                                            <i class="bi bi-chevron-down"></i> Detalle
+                                        </button>
+                                        {{-- Abre el modal en vez de recargar: asi el formulario
+                                             de «Nuevo turno» sigue a la vista. --}}
+                                        <button type="button" class="btn btn-sm btn-outline-neutro" title="Editar"
+                                                data-bs-toggle="modal" data-bs-target="#modalTurno{{ $t->id_turno }}">
+                                            <i class="bi bi-pencil"></i></button>
+                                        <form method="post" action="{{ route('seguridad.turno.baja') }}" class="d-inline">
+                                            @csrf
+                                            <input type="hidden" name="id_turno" value="{{ $t->id_turno }}">
+                                            <button class="btn btn-sm btn-outline-neutro" title="Dar de baja"
+                                                    data-confirmar="¿Dar de baja el turno «{{ $t->nombre }}»? Quienes lo trabajan van a quedar sin ese horario en la agenda.">
+                                                <i class="bi bi-toggle-on"></i></button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                <tr class="sgp-fila-detalle">
+                                    <td colspan="4">
+                                        <div class="collapse" id="detTurno{{ $t->id_turno }}">
+                                            <div class="sgp-det-cuerpo">
+                                                <div class="sgp-det-grid">
+                                                    <div>
+                                                        <dt>Entrada</dt>
+                                                        <dd>{{ (int) ($t->flexibilidad_entrada_min ?? 15) }} min de tolerancia</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt>Quiénes lo trabajan</dt>
+                                                        <dd>
+                                                            @if (! empty($gente[$t->id_turno]))
+                                                                {{ implode(', ', $gente[$t->id_turno]) }}
+                                                            @else
+                                                                <span class="txt-no">nadie todavía</span>
+                                                            @endif
+                                                        </dd>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="4">
+                                        <div class="sgp-vacio">
+                                            <i class="bi bi-clock"></i>
+                                            <div class="t">Todavía no hay turnos cargados.</div>
+                                            <div class="d">
+                                                Sin turnos, la agenda no sabe cuándo atiende cada persona.
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- **Editar va en un emergente, no en el panel de la izquierda.** Antes los
+         dos formularios eran el mismo y cambiaba de cara con `?editar=`, así que
+         al tocar «editar» desaparecía el de crear: para cargar otro turno había
+         que cancelar primero. Son dos acciones distintas y ninguna tapa a la
+         otra. Los campos salen del mismo partial, así que no se pueden
+         desfasar. --}}
+    @foreach ($rows as $t)
+        <div class="modal fade" id="modalTurno{{ $t->id_turno }}" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" style="font-size:1rem">
+                            <i class="bi bi-clock"></i> Editar «{{ $t->nombre }}»</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        @include('seguridad._turno_form', ['t' => $t])
+                    </div>
+                </div>
+            </div>
+        </div>
+    @endforeach
+@endsection

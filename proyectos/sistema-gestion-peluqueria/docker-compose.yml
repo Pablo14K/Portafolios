@@ -1,0 +1,177 @@
+# Entorno de DESARROLLO en contenedores. Desde la 7.85.1 es el único: se dejó
+# de usar XAMPP y se trabaja directo sobre Docker.
+#
+# **El del servidor es otro archivo: `docker-compose.produccion.yml`.** No es
+# una preferencia de estilo — este publica la base en el 3307 y sirve con
+# `artisan serve`, que atiende una petición por vez. Las dos cosas van de
+# aceptables acá a peligrosas en un VPS con IP pública. Ver DESPLIEGUE.md.
+#
+# Lo que resuelve, en orden de importancia:
+#
+#   1. **Fija MariaDB 10.4.** Es lo que más importa y lo que menos se ve venir:
+#      las 56 restricciones CHECK y las 50 rutinas están escritas para MariaDB.
+#      Con MySQL 8 no fallan al importar, fallan después y de a poco.
+#   2. **Importa las dos bases solo**, en el primer arranque.
+#   3. **Clava la zona horaria en America/Asuncion**, en la base y en PHP. Es la
+#      trampa documentada del proyecto: `ahora_bd()` sella el fichaje con la
+#      hora de la base, y una hora corrida no sirve para nada.
+#   4. **Levanta el Automatizador SIFEN con el resto.** Es otro proyecto y vive
+#      fuera de esta carpeta, pero si no está prendido las facturas electrónicas
+#      quedan PENDIENTE y hay que reintentarlas a mano. Ver el servicio `sifen`.
+#
+#   docker compose up          arranca (la primera vez tarda: importa las bases)
+#   docker compose down        apaga, conservando los datos
+#   docker compose down -v     apaga y BORRA las bases, para empezar de cero
+#
+# La base queda publicada en el puerto 3307, no en el 3306, para que conviva
+# con un XAMPP ya instalado sin pelearse por el puerto.
+
+services:
+  bd:
+    image: mariadb:10.4
+    container_name: sgp_bd
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      TZ: America/Asuncion
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      # Paraguay quedó fijo en UTC-3 desde que dejó sin efecto el horario de
+      # verano, así que este valor no cambia en marzo ni en octubre.
+      - --default-time-zone=-03:00
+      # Sin esto, si el servidor tuviera el binlog activo, las funciones NO se
+      # crean y el import termina «bien» igual.
+      - --log-bin-trust-function-creators=1
+    ports:
+      - "3307:3306"
+    volumes:
+      - datos_bd:/var/lib/mysql
+      # Los guiones de arranque: MariaDB los corre una sola vez, cuando la base
+      # está vacía.
+      - ./docker/bd:/docker-entrypoint-initdb.d:ro
+      # Los .sql viven DENTRO del proyecto, en basededatos/. Antes se montaba
+      # la carpeta de arriba, y eso ataba el proyecto a estar adentro de
+      # Sistema_Gestion_Peluqueria: movido a otro lado, importaba dos bases
+      # vacías sin avisar.
+      - ./basededatos:/sql:ro
+    healthcheck:
+      # Por TCP a propósito: durante la importación el servidor temporal
+      # escucha solo por socket, así que esto no lo da por sano antes de tiempo.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+
+  app:
+    build: ./docker/php
+    container_name: sgp_app
+    restart: unless-stopped
+    depends_on:
+      bd:
+        condition: service_healthy
+    environment:
+      TZ: America/Asuncion
+      # **Lo de acá le gana a `secretos.env`**, y hace falta: ese archivo lo
+      # comparten los dos compose, y desde la 7.87.0 lleva las credenciales del
+      # SERVIDOR. Sin fijarlas, el contenedor de desarrollo intenta entrar a su
+      # MariaDB local con la contraseña de producción y contesta
+      # «Access denied for user 'root'» — con la base andando perfecto al lado.
+      DB_PASSWORD: root
+      DB_DATABASE: peluqueria_test
+      APP_KEY: base64:WC2cA7RMPZWmnYlFgJDE+Y8FZ3Cg+NA31/xPTUtF0dU=
+    # **Las credenciales entran por acá, no por el `.env` montado.**
+    #
+    # Con la contraseña dentro de `env.docker`, ese archivo tenía que ir con
+    # `git update-index --skip-worktree` para no commitearla — y esa marca
+    # esconde TODOS sus cambios, también los que sí hay que commitear: el
+    # repositorio quedó una vez con `SIFEN_TIPO_DEFECTO` apuntando a un
+    # comprobante dado de baja porque nadie vio que la corrección no se había
+    # guardado (7.12.1). Separándolas, `env.docker` vuelve a versionarse normal.
+    #
+    # Laravel las respeta porque Dotenv arranca en modo **inmutable**: no pisa
+    # una variable que ya está puesta, así que lo de acá le gana a lo del
+    # `.env` montado —donde esas claves quedaron vacías—.
+    #
+    # `required: false` para que quien clone pueda levantar sin correo: el
+    # sistema arranca igual y `sgp:diagnostico` dice que el correo está apagado,
+    # que es mejor que no arrancar.
+    env_file:
+      - path: ./docker/php/secretos.env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      # El .env del contenedor, montado ENCIMA del de la computadora: así quien
+      # trabaja sin Docker conserva el suyo intacto.
+      #
+      # No alcanza con poner las credenciales como variables de entorno acá
+      # arriba: `php artisan serve` le reenvía al servidor que atiende las
+      # peticiones solo una lista blanca (APP_ENV, PATH, las de Xdebug…), así
+      # que DB_HOST no llegaba y la web se conectaba a 127.0.0.1. Los comandos
+      # de consola sí andaban, que es lo que lo hace difícil de ver.
+      - ./docker/php/env.docker:/app/.env
+      # `vendor` queda en un volumen propio: si se compartiera con Windows, cada
+      # arranque tardaría una eternidad recorriendo miles de archivos.
+      - vendor_app:/app/vendor
+
+  # El Automatizador SIFEN, que es OTRO proyecto: vive en su propia carpeta y el
+  # SGP sólo le habla por HTTP. Se levanta acá para que suba con el resto —si
+  # está apagado, cada factura electrónica queda PENDIENTE y hay que reintentar
+  # a mano, que era justo lo que pasaba antes.
+  #
+  # No necesita Composer: no tiene dependencias ni `composer.json`, corre con su
+  # propio autoloader. Por eso alcanza con la imagen pelada de PHP y no hace
+  # falta construir nada.
+  #
+  # **La ruta es de ESTA computadora.** Por defecto se lo busca como carpeta
+  # hermana del proyecto; si lo tenés en otro lado, exportá `SGP_SIFEN_PATH`
+  # antes de levantar. Y si no está, el contenedor lo dice y se apaga solo: es a
+  # propósito, porque un servidor sirviendo una carpeta vacía contestaría 404 y
+  # el SGP lee un 4xx como RECHAZADO —o sea, «no reintentes»—, cuando lo cierto
+  # es que el servicio no estaba.
+  sifen:
+    image: php:8.3-cli
+    container_name: sgp_sifen
+    # `on-failure` y no `unless-stopped`: cuando el Automatizador no está, el
+    # contenedor avisa y sale con 0 a propósito. Con `unless-stopped` Docker lo
+    # levantaría de nuevo igual y quedaría reiniciándose en bucle, repitiendo el
+    # mismo mensaje para siempre.
+    restart: on-failure
+    working_dir: /automatizador
+    environment:
+      TZ: America/Asuncion
+      # Lo mismo que en el compose del servidor, para que los dos entornos se
+      # comporten igual. **Las variables del contenedor le ganan a su `.env`**:
+      # su cargador sólo escribe la clave `if getenv($k) === false`.
+      SIFEN_MODE: mock
+      APP_URL: http://sifen:8090
+      # El tercer candado del remitente único: el comprobante lo manda el SGP,
+      # con la cuenta de «Seguridad → Correo del sistema». El SGP además le
+      # manda `X-SGP-Correo: no` en cada emisión.
+      MAIL_FROM_EMAIL: ""
+    ports:
+      - "8090:8090"
+    volumes:
+      # Desde la 7.60.0 la copia versionada vive dentro del proyecto, para que
+      # el respaldo del TCC la incluya. `SGP_SIFEN_PATH` sigue mandando: quien
+      # tenga la carpeta original afuera puede seguir apuntándole.
+      - ${SGP_SIFEN_PATH:-./_sifen}:/automatizador
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f /automatizador/public/index.php ]; then
+          echo "El Automatizador SIFEN no está en la ruta esperada."
+          echo "Se lo busca como carpeta hermana del proyecto, o donde diga SGP_SIFEN_PATH."
+          echo "El SGP funciona igual: las facturas electrónicas quedan PENDIENTE y se"
+          echo "reintentan desde el comprobante cuando el servicio esté."
+          exit 0
+        fi
+        exec php -S 0.0.0.0:8090 -t /automatizador/public
+
+volumes:
+  datos_bd:
+  vendor_app:

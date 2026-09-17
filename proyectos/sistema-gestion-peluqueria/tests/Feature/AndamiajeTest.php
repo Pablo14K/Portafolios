@@ -1,0 +1,924 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Servicios\Navegacion;
+use App\Servicios\Permisos;
+use App\Servicios\Tema;
+use Illuminate\Foundation\Console\ServeCommand;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Route;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+/**
+ * Que las piezas sigan enganchadas entre sí.
+ *
+ * Estas pruebas no comprueban una regla del negocio: comprueban que **el
+ * andamiaje no se haya soltado**. Cada una nació de un error real de este
+ * proyecto, y todos son de la misma familia — algo se renombró o se movió, lo
+ * que apuntaba a eso quedó apuntando al vacío, y **nada dio error**:
+ *
+ *  · una clave de permiso renombrada dejó al Asistente sin la agenda completa;
+ *  · el desplegable de la barra salía del nombre de la ruta y no del permiso,
+ *    así que dos módulos quedaron sin un solo renglón;
+ *  · `imprimir.css` apuntaba entero a clases que ninguna vista dibuja;
+ *  · un formulario leía `$editar`, variable que había dejado de existir.
+ *
+ * Ninguno rompe nada al arrancar. Se descubren cuando alguien abre la pantalla
+ * —o peor, cuando no la abre y da por hecho que anda—. Por eso van acá.
+ */
+class AndamiajeTest extends TestCase
+{
+    use DatabaseTransactions;
+
+    /**
+     * Toda clave de permiso que se pide existe en `config/permisos.php`.
+     *
+     * **Es el error de la 7.57.0.** Renombrar `seguridad.turnos` a
+     * `personal.turnos` dejó dos lugares preguntando por la clave vieja:
+     * `Permisos::puede()` contesta que no —no que la clave no existe— así que
+     * el rol pierde la pantalla **en silencio**.
+     */
+    #[Test]
+    public function toda_clave_de_permiso_que_se_pide_existe(): void
+    {
+        $validas = array_flip(Permisos::claves());
+        foreach (array_keys(config('permisos.modulos', [])) as $m) {
+            $validas[$m] = true;   // el módulo padre también se puede pedir
+        }
+
+        $malas = [];
+
+        // 1) Los guardias de las rutas: `->middleware('modulo:x.y')`
+        foreach (Route::getRoutes() as $r) {
+            foreach ($r->gatherMiddleware() as $mw) {
+                if (! is_string($mw) || ! str_starts_with($mw, 'modulo:')) {
+                    continue;
+                }
+                $clave = substr($mw, 7);
+                if (! isset($validas[$clave])) {
+                    $malas[] = 'ruta ' . ($r->getName() ?: $r->uri()) . ' pide «' . $clave . '»';
+                }
+            }
+        }
+
+        // 2) Lo que el código pregunta a mano: `puede('x.y')` y `rolPuede(…, 'x.y')`
+        foreach ($this->archivos(['app', 'resources/views']) as $f => $txt) {
+            // Sólo las escritas como literal: `puede($mod['mod'])` se resuelve
+            // en tiempo de ejecución y desde acá no se puede saber qué vale.
+            preg_match_all("/(?:puede|rolPuede)\\(\\s*'([a-z_]+(?:\\.[a-z_]+)?)'\\s*[,)]/", $txt, $m);
+            foreach ($m[1] as $clave) {
+                if (! isset($validas[$clave])) {
+                    $malas[] = basename($f) . ' pregunta por «' . $clave . '»';
+                }
+            }
+        }
+
+        // 3) Las claves del catálogo de pantallas
+        foreach (config('navegacion.pantallas', []) as $ruta => $p) {
+            if (! isset($validas[(string) $p[2]])) {
+                $malas[] = 'navegacion: «' . $ruta . '» declara el permiso «' . $p[2] . '»';
+            }
+        }
+
+        $this->assertSame([], $malas,
+            "Hay claves de permiso que no existen. Si una se renombró, hay que tocar "
+            . "los guardias, el catálogo y `equivalencias`:\n  " . implode("\n  ", $malas));
+    }
+
+    /**
+     * Lo guardado en `rol_modulo` se sigue entendiendo.
+     *
+     * Una clave vieja no da error: se traduce con `equivalencias` o **se
+     * pierde**. Esta prueba exige que toda clave guardada termine en una que
+     * exista, que es lo que impide que un rol se quede sin pantalla al
+     * actualizar el sistema.
+     */
+    #[Test]
+    public function toda_clave_guardada_en_rol_modulo_sigue_significando_algo(): void
+    {
+        $validas = array_flip(Permisos::claves());
+        foreach (array_keys(config('permisos.modulos', [])) as $m) {
+            $validas[$m] = true;
+        }
+
+        $huerfanas = [];
+        foreach (DB::select('SELECT DISTINCT modulo FROM rol_modulo') as $r) {
+            $clave = (string) $r->modulo;
+            foreach (Permisos::equivaler([$clave]) as $traducida) {
+                if (! isset($validas[$traducida])) {
+                    $huerfanas[] = $clave . ' → ' . $traducida;
+                }
+            }
+        }
+
+        $this->assertSame([], $huerfanas,
+            "Hay permisos guardados que ya no llevan a ninguna pantalla:\n  "
+            . implode("\n  ", $huerfanas));
+    }
+
+    /**
+     * Cada pantalla del catálogo de navegación tiene su ruta declarada.
+     *
+     * El catálogo alimenta las migas, la barra y el desplegable. Una entrada
+     * que nombra una ruta inexistente no revienta: **desaparece del menú**, y
+     * con ella el único camino a esa pantalla.
+     */
+    #[Test]
+    public function cada_pantalla_del_catalogo_tiene_su_ruta(): void
+    {
+        $sinRuta = [];
+        foreach (array_keys(config('navegacion.pantallas', [])) as $nombre) {
+            if (! Route::has((string) $nombre)) {
+                $sinRuta[] = (string) $nombre;
+            }
+        }
+
+        $this->assertSame([], $sinRuta,
+            'El catálogo nombra rutas que no existen: ' . implode(', ', $sinRuta));
+    }
+
+    /**
+     * Todo módulo con submódulos ofrece al menos una pantalla en su menú.
+     *
+     * **Es el error de la 7.58.0.** El desplegable agrupaba por el nombre de la
+     * ruta, y como las pantallas no se mudaron de URL al partir Seguridad,
+     * Personal y Configuración quedaron con el menú vacío. Nadie dio error:
+     * simplemente no había nada que mostrar.
+     */
+    #[Test]
+    public function ningun_modulo_se_queda_sin_pantallas_en_su_menu(): void
+    {
+        $vacios = [];
+        foreach (array_keys(config('permisos.submodulos', [])) as $modulo) {
+            $tiene = false;
+            foreach (config('navegacion.pantallas', []) as $p) {
+                $suyo = str_contains((string) $p[2], '.')
+                    ? explode('.', (string) $p[2])[0]
+                    : (string) $p[2];
+                if ($suyo === $modulo) {
+                    $tiene = true;
+                    break;
+                }
+            }
+            if (! $tiene) {
+                $vacios[] = $modulo;
+            }
+        }
+
+        $this->assertSame([], $vacios,
+            'Estos módulos no tienen ninguna pantalla en el catálogo: ' . implode(', ', $vacios));
+    }
+
+    /**
+     * Lo que el JavaScript busca existe en alguna vista.
+     *
+     * **Es el error de la 7.4.0 y de la 7.1.0**: código correcto, probado, y
+     * apuntando a un marcado que nunca se escribió o que se dejó de usar. Un
+     * `data-*` sin marcado no falla — la función simplemente no ocurre, y desde
+     * afuera se lee como que el sistema no la tiene.
+     */
+    #[Test]
+    public function lo_que_busca_el_javascript_existe_en_el_marcado(): void
+    {
+        $js = (string) file_get_contents(public_path('assets/js/app.js'));
+        $marcado = implode("\n", $this->archivos(['resources/views']));
+
+        preg_match_all("/\\[data-([a-z-]+)[\\]=]/", $js, $m);
+
+        // **Los que el propio JS ESCRIBE no cuentan.** Un atributo que el
+        // script pone con `setAttribute` y despues vuelve a leer no tiene por
+        // que estar en ninguna vista: es su marca interna sobre lo que el mismo
+        // dibujo. Buscarlo en el marcado daria un falso positivo, y silenciar
+        // la guardia entera por eso seria peor — se afina, no se apaga.
+        preg_match_all("/setAttribute\\(\\s*'data-([a-z-]+)'/", $js, $propios);
+        $escritos = array_unique($propios[1]);
+
+        $sinUso = [];
+        foreach (array_unique($m[1]) as $attr) {
+            if (in_array($attr, $escritos, true)) {
+                continue;
+            }
+            if (! str_contains($marcado, 'data-' . $attr)) {
+                $sinUso[] = 'data-' . $attr;
+            }
+        }
+
+        $this->assertSame([], $sinUso,
+            "El JS busca atributos que ninguna vista dibuja:\n  " . implode("\n  ", $sinUso)
+            . "\nO falta el marcado, o sobra el JS.");
+    }
+
+    /**
+     * Las clases propias del CSS aparecen en alguna vista.
+     *
+     * **Es el error de la 7.54.0**: `imprimir.css` apuntaba entero a una
+     * familia de clases que ninguna vista dibuja, así que sus 87 líneas no
+     * aplicaban una sola regla. No se nota mirando el archivo: se nota
+     * imprimiendo.
+     */
+    #[Test]
+    public function las_clases_propias_del_css_se_usan_en_alguna_vista(): void
+    {
+        $marcado = implode("\n", $this->archivos(['resources/views', 'public/assets/js']));
+
+        $sinUso = [];
+        foreach (['app.css', 'imprimir.css'] as $hoja) {
+            $css = (string) file_get_contents(public_path('assets/css/' . $hoja));
+            // Sin comentarios: los de este proyecto NOMBRAN clases retiradas
+            // para explicar por qué se fueron, y mencionarlas no es usarlas.
+            $css = (string) preg_replace('#/\*.*?\*/#s', '', $css);
+
+            // Sólo las propias: las de Bootstrap se dan por buenas.
+            preg_match_all('/\.(sgp-[a-z0-9-]+|comp-[a-z0-9-]+)\b/', $css, $m);
+            foreach (array_unique($m[1]) as $clase) {
+                if (! str_contains($marcado, $clase)) {
+                    $sinUso[] = $hoja . ' → .' . $clase;
+                }
+            }
+        }
+
+        $this->assertSame([], $sinUso,
+            "Hay CSS apuntando a clases que ningún marcado usa:\n  " . implode("\n  ", $sinUso));
+    }
+
+    /**
+     * La marca grande no depende de la pantalla de ingreso.
+     *
+     * `.logo-big` lo dibuja `layout/_marca` con `modo => 'grande'`, y sus
+     * reglas estaban escritas **anidadas bajo `.sgp-login`** — la tarjeta de
+     * las pantallas de acceso—. La pantalla del enlace del correo usa el mismo
+     * partial dentro de un `container` pelado, así que ahí no aplicaba
+     * ninguna: el logo del salón salía a su tamaño natural, una imagen de mil
+     * píxeles encima de la cita. Se reportó como «redimensionar la imagen de
+     * la peluquería en los links de reagendar».
+     *
+     * Es el patrón de siempre de este proyecto —código correcto apuntando a un
+     * marcado que no existe, sin dar ningún error— y por eso queda como
+     * guardia: cualquier vista nueva que dibuje la marca grande fuera del
+     * ingreso vuelve a caer en lo mismo.
+     */
+    #[Test]
+    public function la_marca_grande_no_depende_de_la_pantalla_de_ingreso(): void
+    {
+        $css = (string) preg_replace('#/\*.*?\*/#s', '',
+            (string) file_get_contents(public_path('assets/css/app.css')));
+
+        $this->assertMatchesRegularExpression('/(^|\})\s*\.logo-big\{/', $css,
+            'La regla base de `.logo-big` tiene que valer sola, sin ningún ancestro.');
+        $this->assertMatchesRegularExpression('/(^|\})\s*\.logo-big\.tiene-img\{/', $css,
+            'Y la del logo cargado también: es la que lo redimensiona.');
+        $this->assertStringNotContainsString('.sgp-login .logo-big', $css,
+            'Scopeada bajo `.sgp-login`, la pantalla del enlace del correo se queda sin ella.');
+
+        // Y las vistas que la dibujan fuera del ingreso siguen existiendo: sin
+        // esto la guardia mediría una regla que ya no usa nadie.
+        $token = (string) file_get_contents(resource_path('views/cita_token/ver.blade.php'));
+        $this->assertStringContainsString("'modo' => 'grande'", $token,
+            'La pantalla del enlace del correo dibuja la marca grande.');
+        $this->assertStringNotContainsString('sgp-login', $token,
+            'Y no está dentro de la tarjeta del ingreso: por eso la regla no puede depender de ella.');
+    }
+
+    /**
+     * El texto no se pinta con una variable que no le corresponde al fondo.
+     *
+     * `--sobre-acento` es el texto ENCIMA de un relleno del acento —blanco en
+     * el tema claro— y las `--sobre-oscura*` son el texto de las barras, que
+     * no se invierten: sobre el fondo de la página cualquiera de ellas queda
+     * invisible. `--acento-claro` es un color de detalle: como letra sobre la
+     * tarjeta da 1,9:1. Es el mismo defecto que la identidad anterior tuvo con
+     * `--negro` y `--oro-oscuro` —«los nombres de clientes permanecen en negro
+     * en modo oscuro, se camuflan con el fondo»—, con los nombres de hoy.
+     *
+     * Para eso están `--texto`, que ES el color del texto principal, y
+     * `--acento-enfasis`, que existe justamente para el acento suelto sobre el
+     * fondo (en claro el verde oscuro, en oscuro el claro).
+     *
+     * La guardia mira sólo las declaraciones de `color:`, no los bordes ni los
+     * rellenos: texto `--sobre-acento` encima de un botón del acento es
+     * correcto y tiene que seguir siéndolo.
+     */
+    #[Test]
+    public function el_texto_no_se_pinta_con_una_variable_que_se_da_vuelta(): void
+    {
+        $css = (string) preg_replace('#/\*.*?\*/#s', '',
+            (string) file_get_contents(public_path('assets/css/app.css')));
+
+        // `--acento-enfasis` tiene que seguir teniendo su versión oscura, o la
+        // corrección se queda sin efecto sin que nada lo diga.
+        $oscuro = strstr($css, '[data-tema="oscuro"]{');
+        $this->assertIsString($oscuro, 'El bloque del tema oscuro tiene que existir.');
+        $this->assertStringContainsString('--acento-enfasis:', (string) strstr((string) $oscuro, '}', true),
+            'El tema oscuro redefine `--acento-enfasis`: si deja de hacerlo, el acento del texto vuelve a no leerse.');
+
+        // Los dos lugares que se reportaron, por su nombre.
+        foreach ([
+            'sgp-movil-sujeto' => 'el nombre de la clienta en la tarjeta del celular',
+            'link-acento' => 'el nombre que enlaza a la ficha, en las listas',
+        ] as $clase => $que) {
+            $i = strpos($css, '.' . $clase . '{');
+            $this->assertNotFalse($i, "Falta la regla de `.$clase`.");
+            $regla = substr($css, $i, (int) strpos($css, '}', $i) - $i);
+            $this->assertDoesNotMatchRegularExpression('/color:var\(--(sobre-acento|acento-claro|sobre-oscura[a-z-]*|sup-oscura[a-z0-9-]*)\)/', $regla,
+                "Sobre la tarjeta, $que queda ilegible: usá `--texto` o `--acento-enfasis`.");
+        }
+    }
+
+    /**
+     * La identidad anterior no vuelve escrita a mano.
+     *
+     * La 7.123.0 cambió el negro + oro champagne por el verde agua, y el cambio
+     * tocó cinco lugares que no leen `app.css`: los correos, el PDF de la
+     * factura, el informe impreso, el Excel de Reportes y el KuDE del
+     * Automatizador. Un color escrito a mano no da error: queda dorado en una
+     * pantalla mientras el resto es verde, que es la media corrección de
+     * siempre. Y lo mismo con los nombres viejos de las variables y las
+     * clases, que en un `var()` apuntan al vacío y el navegador simplemente
+     * no pinta nada.
+     *
+     * **El ámbar semántico queda afuera a propósito**: `--ambar` usa los
+     * valores del oro de antes (`#6B5314`, `#FBF1D8`, `#E8CC80`) porque hacía
+     * de «hay que mirarlo». Lo que no puede volver es el oro como ACENTO:
+     * `#C9A84C` y `#8A6C1E`, su rgba, y los nombres `--oro*` y `.btn-oro`.
+     */
+    #[Test]
+    public function la_identidad_anterior_no_vuelve_escrita_a_mano(): void
+    {
+        // Las vistas entran por `.php`: `archivos()` toma `.blade.php` también.
+        $archivos = $this->archivos(['app', 'resources/views', 'public/assets/js', '_sifen/motor', '_sifen/src']);
+        foreach (['public/assets/css/app.css', 'public/assets/css/imprimir.css'] as $css) {
+            // En el CSS se ignoran los comentarios: el encabezado explica la
+            // mudanza nombrando lo viejo, y nombrarlo no es usarlo.
+            $archivos[$css] = (string) preg_replace('#/\*.*?\*/#s', '', (string) file_get_contents(public_path(substr($css, 7))));
+        }
+
+        $viejo = '/#C9A84C|#8A6C1E|rgba\(\s*201\s*,\s*168\s*,\s*76|rgba\(\s*138\s*,\s*108\s*,\s*30'
+            . '|var\(--(oro|negro|carbon|blanco|blanco-hueso|gris-oscuro|gris-calido)(-[a-z]+)?\)'
+            . '|\b(btn|txt|link)-oro\b|["\s]val oro["\s]|0\.788 0\.659 0\.298/i';
+        $encontrados = [];
+        foreach ($archivos as $ruta => $texto) {
+            if (preg_match_all($viejo, $texto, $m)) {
+                $encontrados[] = str_replace(base_path() . DIRECTORY_SEPARATOR, '', $ruta) . ': ' . implode(', ', array_unique($m[0]));
+            }
+        }
+
+        $this->assertSame([], $encontrados,
+            "Quedó la identidad anterior escrita a mano. El acento es `--acento` (#1A6B5F) y sus hermanas;\n"
+            . 'donde no llega un `var()` —correos, PDF, Excel, KuDE— van los valores del verde agua:' . "\n  "
+            . implode("\n  ", $encontrados));
+    }
+
+    /**
+     * El verde agua de `Tema` es el mismo que el de `app.css`.
+     *
+     * Desde la 7.124.0 el salón elige un color y el sistema deriva el resto,
+     * y **«Verde agua» tiene que devolver la identidad EXACTA**: por eso
+     * `Tema::paleta()` trata al `#1A6B5F` como un caso aparte y devuelve los
+     * valores literales de la hoja. O sea que hay una copia, y una copia se
+     * desfasa: el día que alguien retoque un token en `app.css` y no acá, elegir
+     * «Verde agua» —o restablecer— dejaría el sistema **parecido al que se
+     * entrega y no igual**, sin que nada dé error.
+     *
+     * Es la misma clase de guardia que el espejo de PHP de la agenda: no mide
+     * una regla del negocio, mide que dos copias sigan diciendo lo mismo.
+     */
+    #[Test]
+    public function la_paleta_de_fabrica_es_la_que_dice_app_css(): void
+    {
+        $css = (string) preg_replace('#/\*.*?\*/#s', '',
+            (string) file_get_contents(public_path('assets/css/app.css')));
+
+        $bloque = static function (string $selector) use ($css): array {
+            $i = strpos($css, $selector);
+            if ($i === false) {
+                return [];
+            }
+            $cuerpo = substr($css, $i, (int) strpos($css, '}', $i) - $i);
+            preg_match_all('/(--[a-z0-9-]+)\s*:\s*(#[0-9A-Fa-f]{6})\s*;/', $cuerpo, $m, PREG_SET_ORDER);
+
+            return array_column($m, 2, 1);
+        };
+
+        $tokens = Tema::paleta(Tema::PRIMARIO);
+        $malas = [];
+
+        foreach ([
+            ':root{' => Tema::variables(),
+            '[data-tema="oscuro"]{' => Tema::variablesOscuro(),
+        ] as $selector => $mapa) {
+            $hoja = $bloque($selector);
+            $this->assertNotSame([], $hoja, "No se pudo leer el bloque `$selector` de app.css.");
+
+            foreach ($mapa as $token => $vars) {
+                foreach ($vars as $var) {
+                    // Las `--bs-*` del bloque oscuro no son de la identidad: son
+                    // el relleno de un componente de Bootstrap, y se les asigna
+                    // el token más cercano a propósito.
+                    if (str_starts_with($var, '--bs-') || ! isset($hoja[$var])) {
+                        continue;
+                    }
+                    if (strtoupper($hoja[$var]) !== strtoupper($tokens[$token])) {
+                        $malas[] = $selector . ' ' . $var . ': la hoja dice ' . $hoja[$var]
+                            . ' y `Tema` dice ' . $tokens[$token] . ' (token «' . $token . '»)';
+                    }
+                }
+            }
+        }
+
+        $this->assertSame([], $malas,
+            "El verde agua de `App\Servicios\Tema` se separó del de `app.css`, así que elegir
+"
+            . "«Verde agua» ya no devuelve la identidad que se entrega:
+  "
+            . implode("
+  ", $malas));
+    }
+
+    /** Los archivos de esas carpetas, para buscar dentro. */
+    private function archivos(array $dirs): array
+    {
+        $out = [];
+        foreach ($dirs as $d) {
+            $base = base_path($d);
+            if (! is_dir($base)) {
+                continue;
+            }
+            $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($base));
+            foreach ($it as $f) {
+                if ($f->isFile() && preg_match('/\.(php|js)$/', $f->getFilename())) {
+                    $out[$f->getPathname()] = (string) file_get_contents($f->getPathname());
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * La barra marca el módulo al que de verdad pertenece la pantalla.
+     *
+     * **Es el defecto del nombre de ruta, por tercera vez.** Al partir Seguridad
+     * en tres (7.57.0) las pantallas no se mudaron de URL —Personal y
+     * Configuración siguen viviendo bajo `/seguridad`— así que deducir el módulo
+     * del prefijo del nombre encendía **Seguridad** estando en Personal.
+     *
+     * Ya había pasado en el desplegable (7.58.0) y en la tarjeta del módulo
+     * (7.62.0). Acá quedaba el marcado del activo.
+     *
+     * Recorre el catálogo entero en vez de fijar tres casos: así una pantalla
+     * nueva mal declarada también salta.
+     */
+    #[Test]
+    public function la_barra_marca_el_modulo_del_permiso_y_no_el_del_nombre_de_ruta(): void
+    {
+        $modulos = array_map(fn ($m) => (string) $m['mod'], config('navegacion.modulos', []));
+
+        // 1) La entrada de cada módulo se marca a sí misma.
+        foreach (config('navegacion.modulos', []) as $m) {
+            $this->assertSame((string) $m['mod'], Navegacion::moduloDe((string) $m['ruta']),
+                'La entrada de ' . $m['mod'] . ' marcaría otro módulo en la barra.');
+        }
+
+        // **Las pantallas PRESTADAS y escondidas van al módulo que las presta.**
+        // Es la excepción de la 7.108.0 y tiene su motivo: «Visitas y puntos»
+        // abre con `clientes.fidelizacion` —el permiso no se renombró, que
+        // dejaría huérfanas las filas de `rol_modulo`— pero se llega a ella por
+        // Promociones y está escondida del menú de Clientes. Mandando la miga a
+        // Clientes, el enlace llevaba a un módulo donde la pantalla **no está
+        // por ningún lado**: se reportó como «existe el link pero cuando lo
+        // buscás no está».
+        $prestadas = [];
+        foreach (config('navegacion.tambien', []) as $mod => $lista) {
+            foreach ((array) $lista as $clave => $titulo) {
+                $prestadas[(string) $clave] = (string) $mod;
+            }
+        }
+
+        // 2) Cada pantalla del catálogo cae en el módulo de SU permiso, salvo
+        //    las prestadas que además están escondidas del suyo.
+        foreach (config('navegacion.pantallas', []) as $clave => $p) {
+            $permiso = (string) $p[2];
+            $escondida = ($p[3] ?? true) === false;
+            $suyo = $escondida && isset($prestadas[(string) $clave])
+                ? $prestadas[(string) $clave]
+                : (str_contains($permiso, '.') ? explode('.', $permiso)[0] : $permiso);
+
+            $this->assertSame($suyo, Navegacion::moduloDe((string) $clave),
+                "La pantalla $clave marcaría un módulo que no es el suyo ($permiso).");
+        }
+
+        // 3) Y el caso concreto que lo destapó, escrito aparte: sin el arreglo,
+        //    estas tres devuelven «seguridad» y la prueba falla.
+        $this->assertSame('personal', Navegacion::moduloDe('seguridad.personal.index'));
+        $this->assertSame('configuracion', Navegacion::moduloDe('seguridad.configuracion.index'));
+        $this->assertSame('personal', Navegacion::moduloDe('seguridad.turnos'));
+
+        // 4) **«Visitas y puntos» volvió a Clientes en la 7.110.0**, que es su
+        //    módulo de siempre: la 7.107.0 la había mudado a Promociones y con
+        //    eso la miga decía «Servicios» sobre una pantalla que lista
+        //    personas. Escrito aparte porque es el caso que hizo falta arreglar
+        //    dos veces, en direcciones opuestas.
+        $this->assertSame('clientes', Navegacion::moduloDe('clientes.fidelizacion'),
+            'La miga de «Visitas y puntos» tiene que decir Clientes: es donde la pantalla se lista.');
+
+        //    Y la otra mitad, que es lo que hace que esto no vuelva a
+        //    desfasarse: si está listada en su módulo, NO puede estar además
+        //    prestada a otro — ahí volvería a haber dos lugares diciendo dónde
+        //    vive.
+        $this->assertArrayNotHasKey('clientes.fidelizacion',
+            (array) (config('navegacion.tambien.servicios') ?? []),
+            'La pantalla está listada en Clientes: prestarla a Servicios la deja con dos módulos.');
+
+        // **Una pantalla prestada que NO está escondida sigue siendo de su
+        // módulo.** La ficha del equipo la presta Personal y se ve en los dos
+        // lados: ahí la miga tiene que seguir diciendo Seguridad, que es donde
+        // vive. Sin esta mitad, la regla nueva se llevaría puesto ese caso.
+        $this->assertSame('seguridad', Navegacion::moduloDe('seguridad.usuarios'));
+    }
+
+    /**
+     * El landing de cada módulo ofrece TODAS sus pantallas.
+     *
+     * **Séptimo patrón de los errores que este proyecto se hace a sí mismo**: la
+     * tarjeta del landing se escribe a mano y el desplegable sale del catálogo,
+     * así que al sumar una pantalla es fácil hacer sólo una de las dos. El
+     * síntoma es exactamente el que se reportó: «Datos de pago» aparecía en el
+     * menú de la barra y **no** en las tarjetas de Configuración.
+     *
+     * Ya había pasado con la tarjeta de Seguridad (7.62.0) y con la de Personal
+     * (7.62.0), las dos veces al revés — anunciando de más o de menos.
+     *
+     * Se abre cada landing como Administrador y se comprueba que nombre todas
+     * las pantallas que el catálogo declara para ese módulo.
+     */
+    #[Test]
+    public function el_landing_de_cada_modulo_ofrece_todas_sus_pantallas(): void
+    {
+        $this->entrarComo('admin', 'admin123');
+
+        foreach (config('navegacion.modulos', []) as $m) {
+            $url = Navegacion::url((string) $m['ruta']);
+            if ($url === null) {
+                continue;
+            }
+
+            $html = (string) $this->get($url)->assertOk()->getContent();
+
+            // **Se mira SÓLO el bloque de tarjetas.** La barra del layout ya
+            // dibuja todas las pantallas en su desplegable, así que buscar la
+            // URL en el HTML entero la encuentra siempre y la prueba no mide
+            // nada — pasó al escribirla.
+            $desde = strpos($html, '<div class="sgp-cards">');
+            $hasta = strrpos($html, '</main>');
+            $tarjetas = $desde === false
+                ? ''
+                : substr($html, $desde, ($hasta !== false ? $hasta : strlen($html)) - $desde);
+
+            $enBarra = [];
+            foreach (Navegacion::pantallasDe((string) $m['mod']) as $pant) {
+                $enBarra[] = (string) $pant['url'];
+                // La entrada del módulo no se anuncia a sí misma.
+                if ((string) $pant['url'] === $url) {
+                    continue;
+                }
+
+                $this->assertStringContainsString((string) $pant['url'], $tarjetas,
+                    'El landing de ' . $m['mod'] . ' no ofrece «' . $pant['t']
+                    . '», que el catálogo sí declara. La barra la muestra y la tarjeta no.');
+            }
+
+            // **Y al revés: toda tarjeta del landing tiene que estar en la
+            // barra.** Es la otra mitad del mismo desfase, y se reportó con
+            // «Correo del sistema no está en la barra de navegación»: la
+            // tarjeta se había agregado a mano —sólo para el Administrador— y
+            // el catálogo no la conocía, así que el desplegable no la ofrecía.
+            // Con una sola dirección, una pantalla que sólo viva en la
+            // tarjeta pasa en verde.
+            preg_match_all('/<a class="sgp-card" href="([^"#]+)/', $tarjetas, $hrefs);
+            foreach (array_unique($hrefs[1]) as $href) {
+                $this->assertContains(html_entity_decode($href), $enBarra,
+                    'La tarjeta «' . $href . '» del landing de ' . $m['mod']
+                    . ' no está en el desplegable de la barra: la tarjeta la muestra y la barra no.');
+            }
+        }
+    }
+
+    /**
+     * Correo del sistema está en la barra SÓLO para el Administrador.
+     *
+     * No tiene submódulo propio —a propósito: no se puede conceder desde
+     * Roles— y lo guarda el middleware `admin`. En el catálogo va con el
+     * permiso del módulo padre, que dice dónde vive, y el sexto valor que dice
+     * quién la ve. Sin esa marca, el desplegable se la ofrecería a cualquiera
+     * con algo de Configuración y le contestaría 403 al tocarla.
+     *
+     * La premisa se garantiza: al rol Asistente se le da el módulo
+     * Configuración ENTERO dentro de la transacción, así que ve Sucursales y
+     * aun así no tiene que ver el correo.
+     */
+    #[Test]
+    public function el_correo_del_sistema_esta_en_la_barra_solo_para_el_administrador(): void
+    {
+        $url = Navegacion::url('seguridad.correo_sistema');
+        $this->assertNotNull($url);
+
+        $this->entrarComo('admin', 'admin123');
+        $this->assertContains($url, array_column(Navegacion::pantallasDe('configuracion'), 'url'),
+            'El Administrador no ve Correo del sistema en la barra.');
+        $this->assertSame('configuracion', Navegacion::moduloDe('seguridad.correo_sistema'));
+
+        // **Y la miga nombra al módulo.** Salía «Panel › Correo del sistema»
+        // —y «Panel › Datos de pago», y «Panel › Turnos»— porque el encabezado
+        // buscaba la entrada del módulo como `configuracion.index`, y Personal y
+        // Configuración no se mudaron de URL al partir Seguridad: sus entradas se
+        // llaman `seguridad.configuracion.index` y `seguridad.personal.index`.
+        $html = (string) $this->get($url)->assertOk()->getContent();
+        preg_match('/<nav class="sgp-migas".*?<\/nav>/s', $html, $m);
+        $this->assertNotEmpty($m, 'La pantalla no dibujó las migas.');
+        $this->assertStringContainsString((string) Navegacion::url('seguridad.configuracion.index'), $m[0],
+            'La miga de Correo del sistema tiene que pasar por Configuración, que es donde vive.');
+        $html = (string) $this->get(Navegacion::url('seguridad.turnos'))->assertOk()->getContent();
+        preg_match('/<nav class="sgp-migas".*?<\/nav>/s', $html, $m);
+        $this->assertStringContainsString((string) Navegacion::url('seguridad.personal.index'), $m[0] ?? '',
+            'La miga de Turnos tiene que pasar por Personal.');
+
+        // Un rol NO administrador con Configuración entera.
+        DB::insert("INSERT IGNORE INTO rol_modulo (id_rol, modulo) VALUES (3, 'configuracion')");
+        Permisos::olvidar(3);
+        session(['rol' => 3]);
+
+        $urls = array_column(Navegacion::pantallasDe('configuracion'), 'url');
+        $this->assertContains(Navegacion::url('seguridad.sucursales'), $urls,
+            'Premisa: con Configuración entera, el rol tiene que ver Sucursales.');
+        $this->assertNotContains($url, $urls,
+            'Correo del sistema se le ofrece a un rol que no es Administrador: al tocarlo contesta 403.');
+
+        Permisos::olvidar(3);
+    }
+
+    /**
+     * **El Automatizador SIFEN no manda correos: manda el SGP.**
+     *
+     * Los dos saben mandarle el comprobante a la clienta y los dos adjuntan el
+     * KuDE y el XML, pero cada uno lo haría **con su propia cuenta**: el SGP con
+     * la del salón —que el Administrador cambia desde «Seguridad → Correo del
+     * sistema»— y el Automatizador con la de su `.env`, que no se toca desde el
+     * sistema. Con los dos prendidos la clienta recibe lo mismo dos veces desde
+     * direcciones distintas, y cambiar la cuenta en la pantalla arregla la mitad.
+     *
+     * Por eso hay un único remitente, y esta guardia existe porque la forma de
+     * romperlo es **llenar una línea de un archivo de ejemplo**: alguien copia
+     * `.env.example` al servidor, ve `MAIL_USERNAME=tucorreo@gmail.com` y lo
+     * completa de buena fe. Con `MAIL_FROM_EMAIL` vacío, `construirMail()`
+     * devuelve null y el envío se saltea sin romper la declaración.
+     */
+    #[Test]
+    public function el_automatizador_no_manda_correo_por_su_cuenta(): void
+    {
+        $env = base_path('_sifen/.env.example');
+        if (! is_file($env)) {
+            $this->markTestSkipped('El Automatizador no está en esta copia.');
+        }
+
+        $txt = (string) file_get_contents($env);
+
+        foreach (['MAIL_FROM_EMAIL', 'MAIL_USERNAME', 'MAIL_PASSWORD'] as $clave) {
+            $this->assertMatchesRegularExpression(
+                '/^' . $clave . '=[ 	]*$/m', $txt,
+                $clave . ' del Automatizador tiene que quedar VACÍO en el .env.example: '
+                . 'el que le manda el comprobante a la clienta es el SGP, con la cuenta de '
+                . '«Seguridad → Correo del sistema». Con los dos mandando, le llega dos veces '
+                . 'desde direcciones distintas.'
+            );
+        }
+
+        // **El tercer candado, y el único que nadie va a llenar de buena fe.**
+        // El `.env.example` es justamente el archivo que alguien copia y
+        // completa —y encima es el que el Automatizador lee cuando no hay
+        // `.env`—, así que la línea vacía de arriba es una convención. Desde el
+        // compose, en cambio, la variable del contenedor **le gana al archivo**
+        // pase lo que pase: su cargador sólo escribe la clave cuando
+        // `getenv()` devuelve false.
+        foreach (['docker-compose.yml', 'docker-compose.produccion.yml'] as $yml) {
+            $this->assertStringContainsString('MAIL_FROM_EMAIL: ""',
+                (string) file_get_contents(base_path($yml)),
+                $yml . ' dejó de vaciarle el remitente al Automatizador. Sin eso, un `.env` '
+                . 'suyo con la cuenta cargada vuelve a mandarle el comprobante a la clienta '
+                . 'desde una dirección que el salón no puede cambiar.');
+        }
+    }
+
+    /**
+     * **La cuenta de correo se carga en la pantalla, no en un archivo.**
+     *
+     * Los archivos de entorno van SIN credenciales desde la 7.105.0: la cuenta
+     * del salón vive en «Seguridad → Correo del sistema», donde se cambia sin
+     * volver a desplegar y la contraseña queda cifrada.
+     *
+     * La forma de romperlo es la de siempre acá: **alguien completa una línea
+     * de un archivo de ejemplo**. Y no se notaría, porque el sistema mandaría
+     * correos igual — desde una cuenta que el salón no cargó y que nadie puede
+     * cambiar desde el sistema. Es, además, una credencial versionada.
+     *
+     * `secretos.env` sí se versiona desde la 7.87.0, así que esta guardia lo
+     * alcanza.
+     */
+    #[Test]
+    public function la_cuenta_de_correo_no_vive_en_ningun_archivo(): void
+    {
+        $malos = [];
+
+        foreach (['docker/php/secretos.env', 'docker/php/secretos.env.example',
+                  'docker/php/env.docker', 'docker/php/env.produccion'] as $rel) {
+            $f = base_path($rel);
+            if (! is_file($f)) {
+                continue;
+            }
+            $txt = (string) file_get_contents($f);
+
+            foreach (['MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM_ADDRESS'] as $clave) {
+                // `[ \t]*\S` y no `\s*(.+)`: `\s` incluye el salto de línea, así
+                // que la versión obvia se come el fin de renglón y encuentra la
+                // clave de ABAJO — daba positivo con las tres líneas vacías.
+                if (preg_match('/^' . $clave . '=[ \t]*\S/m', $txt)) {
+                    $malos[] = $rel . ' → ' . $clave;
+                }
+            }
+        }
+
+        $this->assertSame([], $malos,
+            "Hay credenciales de correo escritas en un archivo:\n  " . implode("\n  ", $malos)
+            . "\nLa cuenta del salón se carga en «Seguridad → Correo del sistema»: ahí se cambia "
+            . "sin desplegar y la contraseña queda cifrada. En un archivo versionado, además, "
+            . "queda publicada.");
+    }
+
+    /**
+     * **La cabecera que apaga el correo del Automatizador sigue enganchada.**
+     *
+     * El silencio del Automatizador ya no depende de un `.env` que nadie
+     * administra desde el sistema: el SGP le manda `X-SGP-Correo: no` en cada
+     * emisión. Son **dos archivos de proyectos distintos** que tienen que
+     * nombrar lo mismo, y si uno se renombra no da error — el Automatizador
+     * vuelve a mandar el comprobante con SU cuenta y la clienta lo recibe dos
+     * veces desde direcciones que el salón no cargó.
+     *
+     * Es el patrón de siempre acá: algo apunta a algo, se renombra, y nada
+     * avisa.
+     */
+    #[Test]
+    public function la_cabecera_que_calla_al_automatizador_sigue_enganchada(): void
+    {
+        $sgp = (string) file_get_contents(base_path('app/Servicios/Sifen.php'));
+        $this->assertStringContainsString("'X-SGP-Correo' => 'no'", $sgp,
+            'El SGP dejó de decirle al Automatizador que no mande el correo: '
+            . 'la clienta va a recibir el comprobante dos veces, desde dos cuentas.');
+
+        $auto = base_path('_sifen/public/index.php');
+        if (! is_file($auto)) {
+            $this->markTestSkipped('El Automatizador no está en esta copia.');
+        }
+
+        // PHP entrega las cabeceras en $_SERVER con ese nombre: X-SGP-Correo
+        // llega como HTTP_X_SGP_CORREO.
+        $this->assertStringContainsString('HTTP_X_SGP_CORREO', (string) file_get_contents($auto),
+            'El Automatizador dejó de leer la cabecera con la que el SGP lo calla.');
+    }
+
+    /**
+     * **La ayuda contextual guarda el texto, no lo tira.**
+     *
+     * `<x-ayuda>` esconde la explicación detrás de un ícono para que la pantalla
+     * no la muestre toda de golpe. El riesgo es obvio: que al esconderla se
+     * pierda. Por eso se comprueba que el texto siga estando **en el marcado**,
+     * dentro del `data-bs-content` que Bootstrap lee para el globo.
+     *
+     * Y se comprueba que el ícono lleve el disparador `focus`, que es lo único
+     * de los cuatro de Bootstrap que da el comportamiento pedido: abre al
+     * tocarlo y **cierra al tocar afuera**.
+     */
+    #[Test]
+    public function la_ayuda_contextual_conserva_el_texto_que_esconde(): void
+    {
+        $this->entrarComo('admin', 'admin123');
+
+        $html = (string) $this->get(route('citas.agenda'))->assertOk()->getContent();
+
+        $this->assertStringContainsString('class="sgp-ayuda"', $html,
+            'La pantalla tendría que dibujar el ícono de ayuda del subtítulo.');
+        $this->assertStringContainsString('data-bs-trigger="focus"', $html,
+            'Sin el disparador `focus` el globo no se cierra al tocar afuera.');
+
+        // El texto del subtítulo sigue estando, guardado en el globo.
+        $this->assertMatchesRegularExpression(
+            '/data-bs-content="[^"]*Citas del d[ií]a/u', $html,
+            'El subtítulo se escondió y no quedó en el globo: se perdió, que es '
+            . 'lo contrario de lo que hace este componente.'
+        );
+    }
+
+    /**
+     * **Toda clave del diccionario de campos se usa en alguna vista.**
+     *
+     * `config/ayudas.php` es la única fuente del «qué se carga acá», y su riesgo
+     * es el de siempre en este proyecto: que un campo se renombre y la entrada
+     * quede escrita para nadie —sin dar error, sólo dejando de aparecer—. Es el
+     * mismo defecto que el CSS apuntando a clases que ya no existen.
+     *
+     * Se admite el prefijo de los formularios rápidos (`cr_`, `pv_`, `prov`…),
+     * que es como el mismo dato aparece cuando se carga sin salir de otra
+     * pantalla.
+     */
+    #[Test]
+    public function toda_ayuda_de_campo_del_diccionario_se_usa(): void
+    {
+        $marcado = implode("
+", $this->archivos(['resources/views']));
+        $huerfanas = [];
+
+        foreach (array_keys((array) config('ayudas', [])) as $campo) {
+            // Tal cual, o con alguno de los prefijos de las altas rápidas.
+            $patron = '/campo="(?:prov|cr_|pr_|pv_|tr_|sr_|rn_|cf_|mc_)?'
+                . preg_quote((string) $campo, '/') . '"/i';
+            if (! preg_match($patron, $marcado)) {
+                $huerfanas[] = (string) $campo;
+            }
+        }
+
+        $this->assertSame([], $huerfanas,
+            "Hay textos en `config/ayudas.php` que ninguna vista pide:
+  "
+            . implode("
+  ", $huerfanas)
+            . "
+O el campo se renombró, o la entrada sobra.");
+    }
+    /**
+     * **Las credenciales de correo llegan al proceso que atiende la web.**
+     *
+     * `php artisan serve` le reenvía al servidor de desarrollo **sólo una lista
+     * blanca** de variables y descarta el resto, así que una clave que entra por
+     * `secretos.env` la ven los comandos de consola y **no** la web. No da
+     * error: el correo simplemente no sale, con la pantalla diciendo que lo
+     * mandó — la función apagada en silencio que este proyecto ya pagó cara.
+     *
+     * Se comprueba contra `secretos.env.example`, que es la lista de lo que el
+     * salón tiene que cargar: así, agregar mañana un `MAIL_` nuevo y olvidarse
+     * de pasarlo salta acá y no cuando una clienta no recibe su factura.
+     */
+    #[Test]
+    public function las_credenciales_de_correo_llegan_al_servidor_de_desarrollo(): void
+    {
+        $ejemplo = base_path('docker/php/secretos.env.example');
+        $this->assertFileExists($ejemplo, 'Falta la plantilla de secretos.');
+
+        preg_match_all('/^(MAIL_[A-Z_]+)=/m', (string) file_get_contents($ejemplo), $m);
+        $this->assertNotEmpty($m[1], 'La plantilla de secretos no declara ninguna clave de correo.');
+
+        $sueltas = array_values(array_diff($m[1], ServeCommand::$passthroughVariables));
+
+        $this->assertSame([], $sueltas,
+            "Estas credenciales no llegan al servidor de desarrollo:\n  "
+            . implode("\n  ", $sueltas)
+            . "\nAgregalas en AppServiceProvider::pasarLosSecretosAlServidorDeDesarrollo(),"
+            . "\no la web va a verlas vacías mientras la consola las ve cargadas.");
+    }
+
+    /**
+     * **Un modal con scroll no lo pierde por tener un formulario adentro.**
+     *
+     * Reportado en la 7.122.0: *«en cobros (ventana emergente) desapareció el
+     * deslizador y no se puede cobrar»*. `.modal-dialog-scrollable` sólo hace
+     * scrollear a `.modal-body` cuando es hijo DIRECTO de `.modal-content`,
+     * que es una columna flex; con un `<form>` en el medio, el cuerpo deja de
+     * estar acotado, la ventana crece más que la pantalla y el botón de cobrar
+     * queda fuera de alcance — sin ningún error. La ventana de cobro y la de la
+     * seña tienen justamente esa forma, porque el pie con el botón tiene que
+     * estar dentro del formulario.
+     *
+     * Se mide que la regla de `app.css` que le devuelve el flex al formulario
+     * siga ahí, y que haya al menos un modal con esa forma para que la regla
+     * signifique algo.
+     */
+    #[Test]
+    public function el_modal_con_scroll_no_lo_pierde_por_tener_un_formulario(): void
+    {
+        $css = (string) file_get_contents(public_path('assets/css/app.css'));
+        $this->assertMatchesRegularExpression(
+            '/\.modal-dialog-scrollable \.modal-content > form\{[^}]*display:flex[^}]*flex-direction:column[^}]*\}/', $css,
+            'El formulario dentro de un modal con scroll tiene que ser una columna flex, o el cuerpo no scrollea.');
+        $this->assertMatchesRegularExpression(
+            '/\.modal-dialog-scrollable \.modal-content > form > \.modal-body\{[^}]*overflow-y:auto[^}]*\}/', $css,
+            'Y el cuerpo de ese formulario es el que scrollea.');
+
+        $agenda = (string) file_get_contents(resource_path('views/citas/agenda.blade.php'));
+        $this->assertMatchesRegularExpression(
+            '/modal-dialog-scrollable">\s*<div class="modal-content">\s*<form/', $agenda,
+            'Premisa: la agenda tiene un modal con scroll y un formulario adentro — si ya no, esta guardia sobra.');
+    }
+}

@@ -1,0 +1,2810 @@
+/* =====================================================================
+   SGP — Identidad visual
+   Monocromático verde agua, con enfoque accesible (7.123.0).
+
+   Seis colores y una distribución: 60 % el fondo, 25 % la estructura
+   (tarjetas, paneles, tablas, menús), 10 % la lectura (texto y títulos)
+   y la interacción en el verde oscuro y el medio. El acento, SOLO donde
+   hay acción o jerarquía.
+
+   Hasta la 7.122.1 la identidad era negro + oro champagne. Los comentarios
+   de más abajo que hablan del «oro» son de entonces: el oro de antes es el
+   ACENTO de hoy, y las variables y clases cambiaron de nombre con él
+   (`--oro*` → `--acento*`, `.btn-oro` → `.btn-acento`, `--negro` →
+   `--sobre-acento`, `--carbon` → `--texto`, `--blanco` → `--superficie`,
+   `--blanco-hueso` → `--fondo`, `--gris-oscuro` → `--texto-tenue`,
+   `--gris-calido` → `--borde`). Los nombres dicen el PAPEL, no el color:
+   así el próximo cambio de paleta es cambiar valores, no renombrar.
+
+   **La diferencia que importa con la identidad anterior es la polaridad del
+   acento.** El oro era CLARO y llevaba texto negro encima; el verde agua es
+   OSCURO y lleva texto claro. Por eso existe `--sobre-acento`, y por eso lo
+   que se dibuja sobre las barras oscuras tiene su propio acento,
+   `--acento-sobre-oscura`: el verde oscuro sobre la barra verde oscura no se
+   ve.
+   ===================================================================== */
+:root{
+  /* Base — la estructura. Contrastes medidos contra la tarjeta. */
+  --fondo:#F2FBF9;          /* Verde agua extra claro · fondo de página (60 %)        */
+  --superficie:#E1FAF5;     /* Verde agua pastel · tarjetas, paneles, tablas (25 %)   */
+  --texto:#0F4C43;          /* Verde agua muy oscuro · texto y títulos (10 %) · 9,0:1 */
+  --texto-tenue:#375B59;    /* Verde agua medio · texto secundario · 6,9:1            */
+  --borde:#7AC3B7;          /* Verde agua claro · separadores y detalles              */
+  /* Verde agua medio: el borde de los botones secundarios. */
+  --borde-fuerte:#375B59;
+  /* El borde de un CAMPO y de una casilla. WCAG pide 3:1 para el contorno de
+     un control, y el verde claro de los separadores da 1,9:1: un campo vacío
+     no se distinguiría de la tarjeta. Es el claro llevado hacia el medio. */
+  --borde-control:#5E918A;  /* 3,3:1 */
+  --placeholder:#4A776F;   /* 4,8:1 sobre el campo: también se lee */
+
+  /* Acento — la interacción. */
+  --acento:#1A6B5F;         /* Verde agua oscuro · botones primarios y acciones */
+  --acento-oscuro:#0F4C43;  /* hover · pressed                                  */
+  --acento-claro:#7AC3B7;   /* detalles: el borde de lo que se señala           */
+  /* El texto ENCIMA de un relleno `--acento`: 6,3:1. */
+  --sobre-acento:#FFFFFF;
+
+  /* Acciones secundarias en reposo —altas rápidas, chips, días, páginas—.
+     Es el verde claro a medio camino del fondo: tiene que leerse verde de una
+     y no confundirse con la tarjeta. */
+  --acento-suave:#B6DFD8;
+  /* Texto e íconos sobre `--acento-suave` (6,8:1) y `--acento-tinte` (7,7:1). */
+  --acento-texto:#0F4C43;
+  /* Lo que se señala sin ser un botón: la fila elegida, el encabezado de un
+     globo de ayuda, un bloque de aviso suave. */
+  --acento-tinte:#CEEAE5;
+  /* El acento para TEXTO suelto sobre el fondo o una tarjeta —un importe
+     destacado, un enlace, el ícono de un título—. En claro es el verde oscuro
+     (5,8:1 sobre la tarjeta); en oscuro pasa al claro. Es una variable y no un
+     selector del tema, que es la regla. */
+  --acento-enfasis:#1A6B5F;
+
+  /* Semánticos — los únicos colores fuera de la identidad, y sólo para
+     comunicar estado (nunca decoración).
+     El ÁMBAR es nuevo como nombre y no como color: son los valores del oro
+     de antes, que hacía de «hay que mirarlo» —pendiente, atrasada, sin
+     confirmar— además de acento. Con un acento verde, un aviso en verde no se
+     lee como aviso; el ámbar conserva lo que el badge quería decir. */
+  --verde:#2F5D2F;   --verde-tinte:#E9EFE6;  --verde-borde:#CBDCC6;   /* salió bien     */
+  --rojo:#993535;    --rojo-tinte:#F7ECEC;   --rojo-borde:#E8D2D2;    /* se anuló       */
+  --ambar:#6B5314;   --ambar-tinte:#FBF1D8;  --ambar-borde:#E6CF95;   /* hay que mirarlo · 6,5:1 */
+
+  /* ---------------------------------------------------------------
+     Superficies que van OSCURAS en los dos temas: la barra superior,
+     la barra de módulos, el pie y las pastillas de módulo. Son oscuras
+     por identidad, no por el tema, así que tienen su propio juego de
+     variables que NO se invierte.
+
+     La barra superior y el pie son el verde muy oscuro de la paleta; la
+     barra de módulos, un paso más claro: el verde oscuro. Encima va el
+     pastel. Y el acento de estas barras es el verde CLARO, no el oscuro:
+     `--acento` sobre la barra da 1,6:1.
+
+     **`--acento-sobre-oscura` NO va como texto sobre la barra de módulos**
+     (3,1:1): ahí lo activo va en `--sobre-oscura-vivo` con la línea en el
+     verde claro.
+     --------------------------------------------------------------- */
+  --sup-oscura:#0F4C43;          /* barra superior, pie, pastillas              */
+  --sup-oscura-2:#1A6B5F;        /* barra de módulos: un paso más claro          */
+  --sup-oscura-borde:#375B59;
+  --sobre-oscura:#E1FAF5;        /* texto encima — 9,0:1 y 6,0:1                 */
+  --sobre-oscura-tenue:#CEEAE5;  /* secundario   — 7,7:1 y 5,0:1                 */
+  --sobre-oscura-vivo:#FFFFFF;   /* hover y activo                               */
+  --acento-sobre-oscura:#7AC3B7; /* logo, nombre del local, íconos — 4,8:1        */
+
+  --radius:12px;
+
+  /* ---------------------------------------------------------------
+     Bootstrap trae su propio azul (#0d6efd) y grises fríos. Acá se
+     reemplazan por la paleta de la identidad, así los componentes del
+     framework (checkboxes, pestañas, menús, enlaces, foco) salen en
+     los colores del salón sin tener que pisar cada uno a mano.
+     --------------------------------------------------------------- */
+  --bs-body-bg:var(--fondo);
+  --bs-body-color:var(--texto);
+  /* Las utilidades de Bootstrap (`.text-body`, `.bg-body`) NO leen
+     `--bs-body-color`: leen su versión en RGB, y sin esta línea la
+     tomaban del valor compilado —el gris frío del framework— que en el
+     tema oscuro seguía siendo oscuro sobre oscuro. */
+  --bs-body-color-rgb:15,76,67;
+  --bs-emphasis-color:var(--texto);
+  --bs-border-color:var(--borde);
+  --bs-border-color-translucent:var(--borde);
+  --bs-secondary-color:var(--texto-tenue);
+  /* El relleno del botón secundario: el fondo de la página, un paso más
+     claro que la tarjeta, con el borde en el verde medio. */
+  --bs-secondary-bg:var(--fondo);
+  --bs-tertiary-bg:var(--fondo);
+  --bs-tertiary-color:var(--texto-tenue);
+
+  --bs-primary:var(--acento);
+  --bs-primary-rgb:26,107,95;
+
+  --bs-link-color:var(--acento);
+  --bs-link-color-rgb:26,107,95;
+  --bs-link-hover-color:var(--acento-oscuro);
+
+  --bs-focus-ring-color:rgba(26,107,95,.25);
+  --bs-form-invalid-color:var(--rojo);
+  --bs-form-invalid-border-color:var(--rojo);
+}
+
+/* =====================================================================
+   Tema oscuro
+
+   **No cambia ni una regla del sistema: sólo redefine las variables.**
+   Todo lo demás —paneles, tablas, badges, botones— ya está escrito con
+   `var(--…)`, así que cambia solo. Por eso acá no hay un solo selector
+   de componente: si aparece uno, es que algo se escribió con un color
+   suelto en vez de una variable, y eso es lo que hay que arreglar.
+
+   Los neutros se invierten y **siguen siendo verde agua**: un fondo casi
+   negro tirando a verde, no un gris. Con grises el conjunto deja de ser
+   monocromático.
+
+   **El acento SÍ cambia, al revés que el oro.** El oro se leía igual sobre
+   los dos fondos; el verde oscuro de los botones sobre un fondo casi negro
+   pierde fuerza, así que en oscuro el acento pasa al verde claro con texto
+   oscuro encima (8,4:1) — que es la misma polaridad que tenía el oro.
+
+   Los tintes semánticos necesitan versión propia: los claros son casi
+   blancos y sobre un fondo oscuro se convierten en manchas. Se rehacen
+   mezclando el color hacia el fondo, no hacia el blanco.
+   ===================================================================== */
+[data-tema="oscuro"]{
+  /* --- Superficies, de más profunda a más cercana --- */
+  --fondo:#0B1F1C;          /* fondo de página                     */
+  --superficie:#12302B;     /* cards: un paso por encima del fondo */
+  --texto:#E1FAF5;          /* texto principal — 12,9:1            */
+  --texto-tenue:#9CC9C1;    /* texto secundario — 7,8:1            */
+  --borde:#2C5A53;          /* separadores                         */
+  --borde-fuerte:#5E918A;
+  --borde-control:#5E918A;  /* 4,0:1 sobre la tarjeta              */
+  --placeholder:#6F9E97;
+
+  /* --- El acento pasa al claro, con texto oscuro encima --- */
+  --acento:#7AC3B7;
+  --acento-oscuro:#B6DFD8;  /* hover: en oscuro, «más» es más claro */
+  --acento-claro:#7AC3B7;
+  --sobre-acento:#0B1F1C;   /* 8,4:1 */
+  --acento-suave:#1E4A43;
+  --acento-texto:#7AC3B7;   /* 4,9:1 sobre el suave */
+  --acento-tinte:#173A35;
+  --acento-enfasis:#7AC3B7; /* 7,0:1 sobre la tarjeta */
+
+  /* --- Tintes rehechos hacia el fondo, no hacia el blanco --- */
+  --verde-tinte:#16251A;    --verde-borde:#2E4A32;
+  --rojo-tinte:#2B1A1A;     --rojo-borde:#4E2C2C;
+  --ambar-tinte:#2A2314;    --ambar-borde:#4A3B1C;
+
+  /* Los semánticos se aclaran: los oscuros de la paleta clara no llegan al
+     contraste mínimo sobre un fondo oscuro. */
+  --verde:#7FBF7F;
+  --rojo:#E08585;
+  --ambar:#E8CC80;
+
+  /* --- Barra superior, barra de módulos y pie ---
+     Ya eran oscuras en el tema claro, así que sólo se profundizan un paso
+     para que no queden encendidas contra un fondo casi negro. El texto de
+     encima NO cambia. */
+  --sup-oscura:#0A2D28;
+  --sup-oscura-2:#0F4C43;
+  --sup-oscura-borde:#1A6B5F;
+  --sobre-oscura-tenue:#9CC9C1;  /* 8,1:1 y 5,4:1 */
+
+  /* --- Lo que Bootstrap no toma de las variables de arriba --- */
+  --bs-emphasis-color:var(--texto);
+  --bs-body-color-rgb:225,250,245;
+  --bs-secondary-bg:#1A3F39;
+  --bs-tertiary-bg:#0F2724;
+  --bs-primary-rgb:122,195,183;
+  --bs-link-color:var(--acento-claro);
+  --bs-link-color-rgb:122,195,183;
+  --bs-link-hover-color:#FFFFFF;
+  --bs-focus-ring-color:rgba(122,195,183,.3);
+}
+
+/* La barra superior se profundiza en el tema oscuro, así que queda cerca
+   del fondo. Se le deja un borde para que se despegue. */
+[data-tema="oscuro"] .sgp-topbar{border-bottom:1px solid var(--borde);}
+
+/* Las sombras suaves no se ven sobre fondo oscuro: lo que separa un
+   panel del fondo pasa a ser el borde. */
+[data-tema="oscuro"] .sgp-panel,
+[data-tema="oscuro"] .sgp-card{box-shadow:none;border-color:var(--borde);}
+
+/* El navegador dibuja los controles nativos (fechas, horas, selects) con
+   su propio esquema: sin esto, un campo de fecha sale blanco. */
+[data-tema="oscuro"]{color-scheme:dark;}
+
+/* Los bordes de las alertas y de las casillas ya salen de variables
+   (`--verde-borde`, `--borde-control`…), así que no hace falta repetirlos
+   acá. Lo único que queda es el aviso informativo, que en claro va sobre el
+   fondo de la página y en oscuro necesita el relleno de los secundarios. */
+[data-tema="oscuro"] .alert-info{background:var(--bs-secondary-bg);}
+
+*{box-sizing:border-box;}
+body{
+  background:var(--fondo);
+  color:var(--texto);
+  font-family:-apple-system,"Segoe UI",system-ui,Roboto,sans-serif;
+  min-height:100vh;
+  /* **El pie va al fondo de la ventana, no al fondo del contenido.** El panel
+     de una profesional —una caja de citas y tres pastillas— mide media
+     pantalla, y el pie se dibujaba pegado a eso con el resto de la ventana
+     en blanco debajo (7.119.0). La página es una columna: lo que hay en
+     medio estira y el pie queda abajo. Las pantallas de acceso traen su
+     propio envoltorio a pantalla completa y no cambian. */
+  display:flex;flex-direction:column;
+}
+body > main{flex:1 0 auto;width:100%;}
+
+/* ---- Barra superior ---- */
+.sgp-topbar{
+  background:var(--sup-oscura);
+  padding:.7rem 1.4rem;
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:1030;
+}
+.sgp-brand{display:flex;align-items:center;gap:.7rem;text-decoration:none;}
+.sgp-logo{
+  width:34px;height:34px;border-radius:9px;background:var(--acento-sobre-oscura);
+  display:flex;align-items:center;justify-content:center;color:var(--sup-oscura);font-size:1.2rem;
+}
+/* **Con logo cargado, el fondo dorado se va.**
+
+   La pastilla de oro es el fondo del ÍCONO por defecto —la tijera negra sobre
+   oro—, no un marco de la marca. Al cargar un logo la imagen se dibujaba
+   encima con `object-fit:contain`, así que un logo rectangular (los que traen
+   el nombre del salón adentro lo son casi siempre) quedaba con dos bandas
+   doradas a los costados: se veía el ícono de antes asomando de fondo, que es
+   exactamente como se reportó.
+
+   Y deja de ser un cuadrado: un logo ancho aplastado en 34 px no se lee. Se le
+   da el alto y que el ancho salga solo, con un tope para que no empuje la
+   barra.
+
+   **Quitando el logo vuelve todo**, porque la clase la pone el marcado sólo
+   cuando hay imagen. */
+.sgp-logo.tiene-img{
+  background:none;border-radius:0;width:auto;max-width:190px;
+}
+.sgp-logo.tiene-img img{height:100%;width:auto;max-width:100%;object-fit:contain;display:block;}
+
+/* La cara de quien está en sesión: su foto, o sus iniciales sobre el oro.
+   Un monigote genérico igual para todos no distingue a nadie, que es lo único
+   que un avatar tiene que hacer. */
+.sgp-avatar{
+  width:26px;height:26px;border-radius:50%;background:var(--acento);color:var(--sobre-acento);
+  display:inline-flex;align-items:center;justify-content:center;overflow:hidden;
+  font-size:.68rem;font-weight:600;letter-spacing:.02em;flex:0 0 auto;
+}
+.sgp-avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+/* **Con foto, el oro NO se pinta debajo.** Ese oro es el fondo de las iniciales
+   —el avatar por defecto—, y con la imagen encima se veía justo mientras ésta
+   cargaba: un segundo de disco dorado y después la cara, que se reportó como
+   «parpadeo de la foto de perfil». Es el mismo defecto que el logo del salón
+   tuvo en la 7.112.0. Sin fondo, mientras la foto llega no se ve nada — y
+   «nada» se lee como que está cargando, no como que es otro avatar. */
+.sgp-avatar.tiene-img{background:transparent;}
+/* En la barra superior las iniciales van sobre el verde claro, que es el
+   acento de las barras: el verde oscuro sobre la barra oscura no se ve. */
+.sgp-topbar .sgp-avatar:not(.tiene-img){background:var(--acento-sobre-oscura);color:var(--sup-oscura);}
+.sgp-avatar-lg{
+  width:64px;height:64px;font-size:1.35rem;border:1px solid var(--borde);
+}
+/* La cara al lado del nombre en una tabla. Va en su propio contenedor para que
+   el nombre no se parta debajo del avatar cuando la columna se angosta: el
+   `flex` mantiene los dos en el mismo renglón y alineados al medio. */
+.sgp-celda-persona{display:inline-flex;align-items:center;gap:.5rem;min-width:0;}
+
+/* Los productos de la atención, agrupados por el servicio en el que se usaron.
+   El servicio lo dice el rótulo del grupo y viaja escondido en cada fila: antes
+   lo preguntaba un combo por renglón, que es contestar quince veces algo que el
+   contexto ya sabe. */
+.sgp-prod-grupo{
+  border:1px solid var(--borde);border-radius:.6rem;
+  padding:.7rem .8rem;margin-bottom:.75rem;background:var(--superficie);
+}
+.sgp-prod-grupo .sgp-grupo-rotulo{margin-top:0;}
+
+/* Lo que se hizo, en «Ver atención»: los mismos datos que la casilla, sin la
+   casilla. Una casilla se lee como que ahí se decide algo, y ahí ya pasó. */
+.sgp-lista-hecho{
+  display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
+  padding:.3rem 0;border-bottom:1px dashed var(--borde);font-size:.9rem;
+}
+.sgp-lista-hecho:last-child{border-bottom:0;}
+.sgp-brand-name{color:var(--acento-sobre-oscura);font-size:1.05rem;font-weight:500;letter-spacing:.3px;}
+.sgp-topbar .sgp-user{color:var(--sobre-oscura);font-size:.85rem;display:flex;align-items:center;gap:.9rem;}
+/* Sin restringir a "a": en la barra hay enlaces y también botones (Módulos),
+   y un <button> no hereda el color, se queda con el del navegador. */
+.sgp-topbar .sgp-user-link{
+  color:var(--sobre-oscura);text-decoration:none;
+  background:none;border:none;padding:0;font:inherit;line-height:1;
+  display:inline-flex;align-items:center;gap:.35rem;transition:color .15s;
+}
+.sgp-topbar .sgp-user-link:hover,
+.sgp-topbar .sgp-user-link:focus-visible,
+.sgp-topbar .sgp-user-link[aria-expanded="true"]{color:var(--sobre-oscura-vivo);}
+/* El rol se muestra con el oro en contorno, no en relleno: en la barra ya
+   están el logo y el nombre del local en oro sólido, y tres bloques dorados
+   juntos le quitan fuerza al acento. */
+.sgp-rol-chip{
+  background:transparent;color:var(--acento-sobre-oscura);border:1px solid var(--acento-sobre-oscura);
+  font-size:.72rem;font-weight:500;padding:.1rem .6rem;border-radius:20px;white-space:nowrap;
+}
+
+/* La sucursal en la que se está trabajando, al lado del nombre.
+   Va RELLENA y el rol en contorno, y la diferencia no es capricho: el rol de
+   una persona no cambia nunca, la sucursal cambia entre una sesión y la
+   siguiente — y de ella dependen la agenda que ve, la caja que cierra y el
+   stock que descuenta. Es lo que hay que poder leer sin buscar.
+   El oro se usa acá porque esto es jerarquía, no adorno: es el dato que
+   contesta «¿dónde estoy parado?». Sobre la barra oscura, `--acento` con texto
+   `--sobre-acento` da 8,5:1. */
+.sgp-suc-chip{
+  background:var(--acento-sobre-oscura);color:var(--sup-oscura);border:1px solid var(--acento-sobre-oscura);
+  font-size:.72rem;font-weight:600;padding:.1rem .6rem;border-radius:20px;white-space:nowrap;
+}
+.sgp-suc-chip i{font-size:.75rem;}
+/* El mismo chip, ahora como combo: cambiar de local se hace desde la barra
+   y no desde Mi cuenta, que estaba a dos pantallas de todo lo que depende de
+   el. Se le sacan la flecha y el fondo del navegador para que siga leyendose
+   como el chip dorado de siempre. */
+.sgp-suc-combo{
+  appearance:none;-webkit-appearance:none;cursor:pointer;
+  padding:.15rem 1.5rem .15rem .7rem;line-height:1.4;
+  background-image:linear-gradient(45deg,transparent 50%,var(--sup-oscura) 50%),
+                   linear-gradient(135deg,var(--sup-oscura) 50%,transparent 50%);
+  background-position:calc(100% - 12px) 52%,calc(100% - 7px) 52%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat;
+}
+.sgp-suc-combo:focus-visible{outline:2px solid var(--acento-sobre-oscura);outline-offset:2px;}
+/* El respaldo sin JavaScript. Neutro y chico: no compite con el combo, que
+   es lo que se toca. */
+.sgp-suc-ir{
+  background:none;border:1px solid var(--sup-oscura-borde);color:var(--sobre-oscura);
+  border-radius:6px;line-height:1;padding:.05rem .15rem;font-size:1.1rem;
+}
+.sgp-suc-ir:hover{color:var(--sobre-oscura-vivo);border-color:var(--acento-sobre-oscura);}
+/* En el celular el combo se queda —se pidió poder cambiar de local desde
+   el teléfono— pero acotado: un nombre largo se recorta con «…» en vez de
+   empujar la cuenta fuera de la barra. */
+@media (max-width:767.98px){
+  .sgp-suc-combo{max-width:8.5rem;overflow:hidden;text-overflow:ellipsis;font-size:.68rem;padding-left:.55rem;}
+}
+
+
+/* ---- La campanita ---- */
+/* Lo que hay para mirar. El numero va en el rojo semantico y no en oro: el
+   oro es accion y jerarquia, y esto es un estado —una caja sin cerrar desde
+   ayer—. Apagada se queda con el color de la barra, como cualquier otro
+   enlace de ahi.
+
+   **Con avisos toma el ORO DEL SISTEMA (`--acento`), el mismo del logo y del
+   nombre del salon que tiene al lado.** Estaba en `--acento-claro`, que es el
+   oro del hover: dos dorados distintos a dos centimetros uno del otro, y se
+   reporto que el color de la campanita no es el que usa el sistema. El hover
+   sigue siendo el claro, como en todos los enlaces de la barra, asi que los
+   tres pasos del oro se mantienen. */
+.sgp-campana{position:relative;font-size:1.25rem;}
+.sgp-campana.tiene-aviso{color:var(--acento-sobre-oscura);}
+/* **El numerito no se puede comer la campana.** Con el icono en 17 px la
+   pastilla le tapaba media cara y el conjunto se leia como una mancha rosa;
+   ahora el icono es mas grande, el numero sale del glifo y un anillo del
+   color de la barra lo despega. El texto va en `--superficie`, que se invierte
+   con el tema: en claro es blanco sobre el rojo oscuro (7,9:1) y en oscuro es
+   oscuro sobre el rojo claro (7,3:1) — con `#fff` fijo, en oscuro quedaba
+   blanco sobre rosa, en 2,2:1. */
+.sgp-campana-n{
+  position:absolute;top:-.3rem;right:-.55rem;
+  background:var(--rojo);color:var(--superficie);border-radius:20px;
+  box-shadow:0 0 0 1.5px var(--sup-oscura);
+  font-size:.6rem;font-weight:700;line-height:1;padding:.12rem .28rem;min-width:.95rem;text-align:center;
+}
+/* El texto del aviso se lee entero, asi que la lista es ancha y el renglon
+   no se corta: un aviso a medias no dice que hacer. */
+.sgp-campana-lista{max-width:22rem;min-width:18rem;}
+.sgp-alerta{padding:.5rem .9rem .55rem 1.4rem;position:relative;}
+.sgp-alerta + .sgp-alerta{border-top:1px solid var(--borde);}
+/* El punto de «sin ver», del mismo rojo que el numerito: es lo que explica
+   por que la campanita esta contando. Lo que ya se miro se queda en la
+   bandeja —sigue pasando— y pierde el punto, como cualquier bandeja. */
+.sgp-alerta.sin-ver::before{
+  content:"";position:absolute;left:.6rem;top:.95rem;
+  width:.42rem;height:.42rem;border-radius:50%;background:var(--rojo);
+}
+.sgp-alerta-que{font-size:.82rem;line-height:1.35;white-space:normal;}
+.sgp-alerta-ir{display:inline-block;margin-top:.25rem;font-size:.78rem;color:var(--acento-enfasis);font-weight:600;}
+/* Que tan grave es lo que falta cargar. Los mismos tres niveles del bloque
+   que esto reemplaza: rojo semantico lo que IMPIDE trabajar, el tinte de oro
+   lo que hace que el sistema decida distinto, neutro lo que solo conviene. */
+.sgp-pend-nivel{
+  display:inline-block;font-size:.62rem;font-weight:700;letter-spacing:.3px;
+  padding:.05rem .4rem;border-radius:4px;margin-bottom:.2rem;
+}
+.sgp-pend-nivel.n-impide{background:var(--rojo-tinte);color:var(--rojo);}
+.sgp-pend-nivel.n-confunde{background:var(--ambar-tinte);color:var(--ambar);}
+.sgp-pend-nivel.n-conviene{background:var(--acento-tinte);color:var(--texto-tenue);}
+
+
+/* El desplegable abierto se marca con el oro claro, igual que el hover */
+.sgp-dropdown{--bs-dropdown-link-active-bg:var(--acento);font-size:.88rem;}
+.sgp-dropdown .dropdown-item i{width:1.3rem;color:var(--acento-enfasis);}
+
+/* ---- Accesos rápidos ---- */
+/* Atajos de navegación y altas rápidas. Son acción, así que van en oro, con
+   tres estados bien distintos:
+     reposo    oro suave + contorno oro   (se lee dorado de una)
+     hover     oro macizo + texto negro   (igual que el botón principal)
+     al tocar  blanco + texto negro       (confirma el clic con un destello)
+   El contorno en reposo es lo que evita que compitan con el botón primario
+   de la pantalla, que sí es oro macizo de entrada. */
+.sgp-chip{
+  display:inline-flex;align-items:center;gap:.3rem;
+  background:var(--acento-suave);border:1px solid var(--acento);border-radius:20px;
+  padding:.2rem .7rem;font-size:.78rem;color:var(--acento-texto);text-decoration:none;
+  transition:background .12s,color .12s,border-color .12s;white-space:nowrap;
+}
+.sgp-chip:hover,.sgp-chip:focus-visible{background:var(--acento);border-color:var(--acento-oscuro);color:var(--sobre-acento);}
+.sgp-chip:active{background:var(--fondo);border-color:var(--acento-oscuro);color:var(--texto);}
+.sgp-chip i{font-size:.85rem;}
+/* Elegido y sigue elegido: el día y la hora que la clienta tocó en el selector
+   de la agenda. Estaba escrito sólo anidado en `.agenda-grupo` y `.sgp-atajos`,
+   dos contenedores que ninguna vista dibuja, así que el JS ponía la clase y no
+   la respondía nadie: se tocaba un día y no cambiaba nada en pantalla. */
+.sgp-chip.activo{background:var(--acento);border-color:var(--acento-oscuro);color:var(--sobre-acento);font-weight:600;}
+
+/* Alta rápida dentro de un formulario: "Nuevo cliente", "Nueva sucursal",
+   "Agregar fila". Mismo lenguaje que los chips. Se define con las variables
+   de Bootstrap para que el estado activo del framework no lo pise. */
+.btn-rapido{
+  --bs-btn-bg:var(--acento-suave);
+  --bs-btn-border-color:var(--acento);
+  --bs-btn-color:var(--acento-texto);
+  --bs-btn-hover-bg:var(--acento);
+  --bs-btn-hover-border-color:var(--acento-oscuro);
+  --bs-btn-hover-color:var(--sobre-acento);
+  --bs-btn-active-bg:var(--fondo);
+  --bs-btn-active-border-color:var(--acento-oscuro);
+  --bs-btn-active-color:var(--texto);
+  --bs-btn-disabled-bg:var(--fondo);
+  --bs-btn-disabled-border-color:var(--borde);
+  --bs-btn-disabled-color:var(--texto-tenue);
+  font-weight:500;
+}
+
+/* ---- Migas / encabezado de página ---- */
+.sgp-page-head{padding:1.3rem 0 .3rem;}
+.sgp-page-head h1{font-size:1.3rem;font-weight:500;margin:0;}
+.sgp-page-head .sub{font-size:.85rem;color:var(--texto-tenue);margin-top:.15rem;}
+.sgp-back{color:var(--acento-enfasis);text-decoration:none;font-size:.85rem;}
+.sgp-back:hover{text-decoration:underline;}
+
+/* ---- Grilla de tarjetas de módulos ---- */
+.sgp-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;padding:.6rem 0 2rem;}
+.sgp-card{
+  background:var(--superficie);border:1px solid var(--borde);border-radius:var(--radius);
+  padding:1.1rem;text-decoration:none;color:var(--texto);display:block;transition:border-color .15s,transform .15s;
+}
+.sgp-card:hover{border-color:var(--acento);transform:translateY(-2px);}
+.sgp-card .ic{
+  width:42px;height:42px;border-radius:10px;background:var(--fondo);
+  display:flex;align-items:center;justify-content:center;font-size:1.4rem;color:var(--texto-tenue);
+}
+.sgp-card:hover .ic{color:var(--acento-enfasis);}
+.sgp-card h3{font-size:1rem;font-weight:500;margin:.8rem 0 .35rem;}
+.sgp-card p{font-size:.78rem;color:var(--texto-tenue);margin:0;line-height:1.5;}
+/* La tarjeta oscura —Seguridad— es oscura en LOS DOS temas, por identidad, así
+   que va con las variables que NO se invierten. Estaba escrita con `--texto`
+   y `--fondo`, que en el tema claro daban justo lo que hacía falta y se
+   dan vuelta al invertir la paleta: el fondo pasaba a ser claro y el título
+   también, y la tarjeta quedaba ilegible. Es el mismo error que dejó los
+   enlaces del pie en 1,5:1 hasta la 7.2.1. */
+.sgp-card.dark{background:var(--sup-oscura-2);border-color:var(--sup-oscura-borde);}
+.sgp-card.dark .ic{background:var(--sup-oscura);color:var(--acento-sobre-oscura);}
+.sgp-card.dark h3{color:var(--sobre-oscura);}
+.sgp-card.dark p{color:var(--sobre-oscura-tenue);}
+.sgp-card.dark:hover{border-color:var(--acento-sobre-oscura);}
+.sgp-card.dark:hover .ic{color:var(--sobre-oscura-vivo);}
+
+/* ---- Contenedores de contenido ---- */
+.sgp-panel{background:var(--superficie);border:1px solid var(--borde);border-radius:var(--radius);padding:1.2rem;}
+
+/* ---- Tablas ---- */
+.table thead th{background:var(--fondo);color:var(--texto-tenue);font-weight:500;font-size:.8rem;
+  text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--borde);}
+.table td{vertical-align:middle;}
+
+/* La fila que se venía a buscar: se llega a Emitir desde la agenda con una
+   cita ya elegida, y entre cien filas iguales hay que poder encontrarla de un
+   vistazo. Va en `--acento-tinte`, que es el de los avisos, no en `--acento-suave`,
+   que es para fondos de acción: la fila no es un botón. */
+.table tbody tr.sgp-fila-elegida > td{background:var(--acento-tinte);}
+.table tbody tr.sgp-fila-elegida > td:first-child{box-shadow:inset 3px 0 0 var(--acento);}
+
+/* ---- Filas de detalle expandibles ----
+   El detalle que estaba en columnas extra ahora se esconde detrás de un botón.
+   Se despliega como una fila debajo del registro, con la pieza `collapse` de
+   Bootstrap 5, sin JavaScript propio.
+
+   Reglas:
+   · El fondo es un tinte suave para separarlo visualmente de las filas normales.
+   · El `<td>` lleva `colspan` entero y `padding:0`: el padding lo pone el
+     contenido de adentro, no la celda, así el `collapse` no deja un hueco
+     cuando está cerrado.
+   · El borde superior se saca porque la fila de arriba ya lo tiene.
+   · En tema oscuro los colores se ajustan solos gracias a las variables. */
+.sgp-fila-detalle > td{padding:0 !important;border-top:0 !important;background:transparent;}
+.sgp-fila-detalle .sgp-det-cuerpo{
+  padding:.8rem 1.2rem;background:var(--acento-tinte);border-bottom:1px solid var(--borde);
+}
+.sgp-fila-detalle .sgp-det-cuerpo dl{margin:0;font-size:.88rem;}
+.sgp-fila-detalle .sgp-det-cuerpo dt{color:var(--texto-tenue);font-weight:500;font-size:.78rem;
+  text-transform:uppercase;letter-spacing:.02em;margin-bottom:.1rem;}
+.sgp-fila-detalle .sgp-det-cuerpo dd{margin-bottom:.6rem;}
+.sgp-fila-detalle .sgp-det-cuerpo dd:last-child{margin-bottom:0;}
+/* Layout en grilla cuando hay espacio: dos o tres pares al lado */
+.sgp-det-grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:0 1.5rem;}
+
+/* Botón chevron que rota al expandir */
+.sgp-btn-detalle{
+  display:inline-flex;align-items:center;justify-content:center;gap:.35rem;
+  background:none;border:1px solid var(--borde);border-radius:var(--radius);
+  color:var(--texto-tenue);font-size:.78rem;padding:.22rem .55rem;cursor:pointer;
+  transition:transform .2s ease,border-color .15s;white-space:nowrap;
+}
+.sgp-btn-detalle:hover{border-color:var(--acento);color:var(--acento-enfasis);}
+.sgp-btn-detalle .bi{transition:transform .25s ease;font-size:.65rem;}
+.sgp-btn-detalle[aria-expanded="true"] .bi{transform:rotate(180deg);}
+.sgp-btn-detalle[aria-expanded="true"]{border-color:var(--acento);color:var(--acento-enfasis);}
+
+/* ---- Las acciones de la fila de la agenda ----
+   Siete íconos en fila se leían como una adivinanza —se reportó como
+   «demasiado confuso»—: van en DOS columnas, cada uno con su nombre al
+   lado del ícono. El nombre sale del `title`, así que no se puede desfasar
+   del tooltip; y los avisos («falta fichaje», «sin cobrar») ocupan las dos
+   columnas, que no son un botón y no tienen por qué parecerlo.
+   **Y chicos.** La primera versión (7.118.0) los dibujaba del alto de un
+   botón normal —30 px, 143 de ancho— y con tres renglones la fila de la
+   agenda medía 116 px: «ahora los botones son demasiado grandes». Van del
+   alto de un badge (24 px), con la letra a .7rem y la grilla acotada a 266
+   px —lo justo para «Cambiar profesional» entero—: se siguen leyendo, y la fila vuelve a medir lo que mide una cita. */
+/* **El rótulo se lee entero, aunque tenga que partirse en dos renglones.**
+   Iba en una línea con `text-overflow:ellipsis`, así que en 133 px el más
+   largo salía como «Cambiar profes…» — se reportó como que los títulos no se
+   ven completos, en la computadora y en el celular. Un botón que no dice qué
+   hace es el problema que estas dos columnas vinieron a resolver, así que
+   antes que recortarlo se lo deja envolver: la fila crece unos píxeles y los
+   dos botones de cada renglón siguen midiendo lo mismo, porque la grilla
+   estira. El ancho sube a 300 px, que es lo que el más largo necesita para
+   entrar en dos palabras cómodas. */
+.sgp-acciones{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.2rem .25rem;
+  min-width:200px;max-width:300px;margin-left:auto;text-align:left;
+}
+.sgp-acciones > form{margin:0;display:block;}
+.sgp-acciones .btn{
+  width:100%;height:100%;display:inline-flex;align-items:center;justify-content:flex-start;gap:.3rem;
+  font-size:.7rem;line-height:1.2;padding:.18rem .42rem;
+  white-space:normal;overflow:visible;text-overflow:clip;text-align:left;
+}
+.sgp-acciones .btn .bi{font-size:.8rem;}
+.sgp-acciones .btn .bi{flex-shrink:0;}
+.sgp-acciones .sgp-btn-ico[title]::after{content:attr(title);overflow:visible;text-overflow:clip;}
+.sgp-acciones .badge-estado{grid-column:1 / -1;justify-self:start;}
+
+/* «Quién viene», en la ventana de la cita: un renglón por persona, con su
+   papel, sus servicios y su alergia juntos. Eran tres listas que volvían a
+   nombrar a la misma gente. */
+/* El modal de cobro, ancho y en dos columnas en la computadora: la cuenta a
+   la izquierda, el pago a la derecha. En el celular, una columna. */
+.sgp-cobro-2col{display:grid;grid-template-columns:minmax(0,1fr);gap:.75rem 1.25rem;}
+@media (min-width:992px){
+  .sgp-cobro-2col{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+  .sgp-cobro-pago{border-left:1px dashed var(--borde);padding-left:1.25rem;}
+}
+.sgp-cita-gente{list-style:none;margin:0;padding:0;}
+.sgp-cita-gente > li{padding:.45rem 0;border-top:1px dashed var(--borde);}
+.sgp-cita-gente > li:first-child{border-top:0;padding-top:0;}
+.sgp-cita-gente-cab{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;}
+.sgp-cita-gente-det{font-size:.84rem;margin-top:.15rem;}
+.sgp-cita-gente-det .bi{color:var(--texto-tenue);margin-right:.15rem;}
+.sgp-cita-gente-det .txt-no .bi{color:inherit;}
+.sgp-acciones > .text-muted-warm{grid-column:1 / -1;}
+
+/* ---- La ficha de la cita, en su ventana ----
+   Cuatro bloques con título, en dos columnas cuando hay ancho. Los
+   rótulos van chicos y en mayúsculas, como en las fichas plegables de las
+   demás listas: es la misma jerarquía, en otro contenedor. */
+.sgp-cita-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem 1.5rem;}
+.sgp-cita-bloque{
+  background:var(--fondo);border:1px solid var(--borde);
+  border-radius:calc(var(--radius) - 4px);padding:.75rem .9rem;font-size:.88rem;
+}
+.sgp-cita-ancho{grid-column:1 / -1;}
+.sgp-cita-bloque h6{
+  font-size:.8rem;font-weight:600;margin:0 0 .5rem;color:var(--texto);
+  display:flex;align-items:center;gap:.4rem;padding-bottom:.35rem;border-bottom:1px solid var(--borde);
+}
+.sgp-cita-bloque h6 .bi{color:var(--acento-enfasis);}
+.sgp-cita-bloque dl{margin:0;}
+.sgp-cita-bloque dt{color:var(--texto-tenue);font-weight:500;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;margin-bottom:.1rem;}
+.sgp-cita-bloque dd{margin-bottom:.6rem;}
+.sgp-cita-bloque dd:last-child{margin-bottom:0;}
+/* Los cobros son pares cortos: rótulo y valor en la misma línea. */
+.sgp-cita-cobros{display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem;align-items:baseline;}
+.sgp-cita-cobros dt,.sgp-cita-cobros dd{margin:0;}
+
+/* ---- Botones ---- */
+.btn-acento{background:var(--acento);border:none;color:var(--sobre-acento);font-weight:500;}
+.btn-acento:hover{background:var(--acento-oscuro);color:var(--sobre-acento);}
+/* **El botón secundario tiene que verse como botón.** Era blanco con un
+   borde del color de las líneas de la tabla y el texto en gris: sobre la
+   tarjeta blanca se fundía con el fondo, y en el tema oscuro —fondo del
+   botón igual al de la tarjeta— directamente desaparecía. Se reportó así:
+   «los botones de acción se mezclan con el fondo». Ahora lleva relleno
+   propio —un paso más oscuro que la tarjeta—, borde firme y el texto en
+   el color principal: 12,8:1 en claro y 13,1:1 en oscuro, medidos. El hover es
+   el oro suave, el mismo escalón que las altas rápidas. */
+.btn-outline-neutro{background:var(--bs-secondary-bg);border:1px solid var(--borde-fuerte);color:var(--texto);font-weight:500;}
+.btn-outline-neutro:hover{background:var(--acento-suave);border-color:var(--acento);color:var(--acento-texto);}
+.btn-outline-neutro:focus-visible{box-shadow:0 0 0 .2rem rgba(26,107,95,.35);}
+/* Sirve tanto para <a> como para <button class="btn btn-link link-acento">
+   **Va en `--acento-enfasis` y no en `--acento-oscuro`**: el oro oscuro es el estado
+   *pressed* de un botón dorado, pensado para fondos claros, y NO se invierte
+   con el tema — sobre el oscuro queda en 2,3:1. Es el mismo defecto que dejaba
+   los nombres de las clientas ilegibles, con otra variable. */
+.link-acento{color:var(--acento-enfasis);text-decoration:none;}
+.link-acento:hover,.link-acento:focus{color:var(--acento-enfasis);text-decoration:underline;}
+
+/* ---- Badges de estado ---- */
+.badge-estado{font-size:.72rem;font-weight:500;padding:.2rem .6rem;border-radius:20px;display:inline-block;}
+/* El oro se reserva para el estado VIVO (En proceso): es lo único que está
+   pasando ahora y lo que merece la mirada. Lo que está simplemente agendado
+   o cerrado va en neutros cálidos, y el resultado (bien / anulado) en los
+   semánticos. Así el badge dorado señala algo, en vez de ser decoración. */
+.e-ok{background:var(--verde-tinte);color:var(--verde);}
+.e-prog{background:var(--fondo);color:var(--texto-tenue);box-shadow:inset 0 0 0 1px var(--borde);}
+.e-proc{background:var(--acento-suave);color:var(--acento-texto);font-weight:600;}
+/* **Un aviso no es un botón, y se tiene que ver.** El de advertencia era
+   transparente con un contorno dorado: al lado de los botones de contorno
+   de la fila se leía como uno más de ellos, y se reportó como que «se
+   mezclan con los avisos». Los badges van rellenos y en píldora; los
+   botones, rectangulares y con relleno gris. Dos formas para dos cosas. */
+.e-warn{background:var(--ambar-tinte);color:var(--ambar);box-shadow:inset 0 0 0 1px var(--ambar-borde);}
+.e-no{background:var(--rojo-tinte);color:var(--rojo);}
+.e-muted{background:var(--acento-tinte);color:var(--texto-tenue);}
+
+/* **La barra de caja del panel ya no tiene regla propia.** Eran
+   `.sgp-caja-barra`, `.sgp-caja-estado`, `.sgp-caja-saldo`, `.sgp-caja-lista`
+   y `.sgp-caja-item`: desde la 7.118.0 el resumen financiero la dibuja con
+   `.metric-card`, como a los ingresos. La clase `.sgp-caja-barra` sigue en el
+   marcado y no es decorativa: es el gancho por el que la prueba encuentra el
+   bloque para comprobar que estén TODAS las cajas abiertas. */
+
+/* ---- Métricas del dashboard ---- */
+.sgp-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:.4rem;}
+.sgp-metric{background:var(--superficie);border:1px solid var(--borde);border-radius:var(--radius);padding:1rem 1.1rem;}
+.sgp-metric .lbl{font-size:.75rem;color:var(--texto-tenue);text-transform:uppercase;letter-spacing:.03em;}
+.sgp-metric .val{font-size:1.6rem;font-weight:500;margin-top:.2rem;}
+.sgp-metric .val.acento{color:var(--acento-enfasis);}
+
+/* Variante compacta: para un informe con siete números seguidos, la tarjeta
+   normal ocupa demasiado alto. El rótulo deja de ir en mayúsculas —que obliga
+   a partirlo— y el número baja de 1.6 a 1.25rem, que sigue lejísimos del
+   texto de al lado. */
+.sgp-metrics-compacto{grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:.55rem;}
+.sgp-metrics-compacto .sgp-metric{padding:.55rem .7rem;}
+.sgp-metrics-compacto .lbl{text-transform:none;letter-spacing:0;font-size:.76rem;line-height:1.25;}
+.sgp-metrics-compacto .val{font-size:1.25rem;margin-top:.1rem;}
+
+/* ---- Cuánto va sumando (Registrar atención) ---- */
+.sgp-suma-at{margin-top:.7rem;padding:.6rem .8rem;border:1px solid var(--borde);
+    border-radius:var(--radius);background:var(--superficie);}
+.sgp-suma-fila{display:flex;justify-content:space-between;align-items:baseline;
+    gap:1rem;font-size:.85rem;padding:.15rem 0;}
+.sgp-suma-total{border-top:1px solid var(--borde);margin-top:.3rem;
+    padding-top:.4rem;font-size:.95rem;}
+
+/* `.sgp-falta*` —la tarjeta de «lo que falta cargar» del panel— se fue en la
+   7.117.0: ese bloque se mudó ADENTRO de la campanita, por pedido del usuario,
+   y ahí cada renglón se dibuja con `.sgp-alerta` y `.sgp-pend-nivel`, que son
+   los de la bandeja. Los tres niveles siguen pintándose con lo que cada color
+   ya significa —rojo semántico lo que impide, oro lo que hace decidir
+   distinto, neutro lo que sólo conviene—: lo que cambió es dónde se leen. */
+
+
+/* ---- Login ---- */
+/* `column` no es un detalle: los avisos de `auth/marco` se dibujan como
+   hermanos de la tarjeta, así que en fila quedaban PEGADOS A SU IZQUIERDA,
+   fuera del recuadro y contra el margen. «Ese nombre de usuario ya está en
+   uso» aparecía en el borde de la pantalla, lejos del campo que lo causó. */
+.sgp-login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1rem;gap:.75rem;}
+.sgp-login{background:var(--superficie);border:1px solid var(--borde);border-radius:16px;padding:2rem;width:100%;max-width:390px;}
+/* Mismo ancho que la tarjeta, para que se lean como una sola pieza. */
+.sgp-login-wrap > .alert{width:100%;max-width:390px;margin-bottom:0;}
+/* La marca grande de las pantallas que no tienen barra. **Las reglas NO van
+   scopeadas bajo `.sgp-login`**, y eso era el defecto: `layout/_marca` dibuja
+   el mismo `.logo-big` en la pantalla del enlace del correo, que vive en un
+   `container` pelado y nunca tuvo esa clase — así que el logo del salón salía
+   ahí **a su tamaño natural**, una imagen de mil píxeles encima de la cita. Se
+   reportó como «redimensionar la imagen de la peluquería en los links de
+   reagendar». Es el patrón de siempre: código correcto apuntando a un marcado
+   que no existe, y sin dar ningún error. */
+.logo-big{width:56px;height:56px;border-radius:14px;background:var(--acento);display:flex;align-items:center;
+  justify-content:center;color:var(--sobre-acento);font-size:1.9rem;margin:0 auto 1rem;}
+/* Igual que en la barra: con logo cargado, el fondo dorado del ícono por
+   defecto se va y el logo puede ser ancho. Ver `.sgp-logo.tiene-img`. */
+.logo-big.tiene-img{background:none;border-radius:0;width:auto;max-width:240px;height:64px;}
+.logo-big.tiene-img img{height:100%;width:auto;max-width:100%;object-fit:contain;display:block;}
+/* En el celular, donde entra menos: la marca no puede comerse la pantalla. */
+@media (max-width:575.98px){
+  .logo-big.tiene-img{max-width:180px;height:52px;}
+}
+
+/* ---- Form ---- */
+.form-label{font-size:.82rem;color:var(--texto-tenue);font-weight:500;}
+.form-control:focus,.form-select:focus{border-color:var(--acento);box-shadow:0 0 0 .18rem rgba(26,107,95,.18);}
+
+/* =====================================================================
+   Componentes de Bootstrap que traen el azul compilado y no salen con
+   variables. Se pisan uno por uno para que no quede nada frío.
+   ===================================================================== */
+
+/* Casillas, radios e interruptores: marcados en oro, no en azul */
+.form-check-input{border-color:var(--borde-control);}
+.form-check-input:checked{background-color:var(--acento);border-color:var(--acento-oscuro);}
+.form-check-input:focus{border-color:var(--acento);box-shadow:0 0 0 .18rem rgba(26,107,95,.22);}
+.form-check-input:focus:not(:checked){background-image:none;}
+
+/* Pestañas tipo pastilla (Cargar stock) *
+
+/* Menú desplegable de módulos */
+.dropdown-menu{
+  --bs-dropdown-bg:var(--superficie);
+  --bs-dropdown-border-color:var(--borde);
+  --bs-dropdown-link-color:var(--texto);
+  --bs-dropdown-link-hover-bg:var(--fondo);
+  --bs-dropdown-link-hover-color:var(--acento-enfasis);
+  --bs-dropdown-link-active-bg:var(--acento);
+  --bs-dropdown-link-active-color:var(--sobre-acento);
+  --bs-dropdown-divider-bg:var(--borde);
+}
+
+/* Foco: anillo dorado tenue en vez del azul */
+.btn:focus-visible,.btn-close:focus,.form-check-input:focus-visible,.accordion-button:focus{
+  box-shadow:0 0 0 .18rem rgba(26,107,95,.22)!important;outline:none;
+}
+.btn-acento:focus-visible{box-shadow:0 0 0 .2rem rgba(15,76,67,.35)!important;}
+
+/* Tablas y tarjetas sobre neutros cálidos */
+.table{
+  --bs-table-bg:transparent;
+  --bs-table-color:var(--texto);
+  --bs-table-border-color:var(--borde);
+  --bs-table-striped-bg:var(--fondo);
+  --bs-table-hover-bg:var(--fondo);
+}
+.card,.modal-content,.list-group-item{
+  background-color:var(--superficie);border-color:var(--borde);
+}
+.modal-header,.modal-footer{border-color:var(--borde);}
+/* **Un modal «scrollable» con un <form> adentro no scrollea** (7.122.0,
+   reportado: «en la ventana de cobro desapareció el deslizador y no se
+   puede cobrar»). Bootstrap le pone `overflow:hidden` y `max-height:100%` al
+   `.modal-content` y el scroll al `.modal-body`, contando con que el cuerpo
+   sea hijo DIRECTO del contenido, que es una columna flex. Con el formulario
+   en el medio, el formulario crece a su alto natural, el cuerpo nunca se
+   achica y lo que no entra en la ventana —el botón «Cobrar»— queda cortado
+   sin barra para llegar. El formulario pasa a ser la columna flex. */
+.modal-dialog-scrollable .modal-content > form{display:flex;flex-direction:column;min-height:0;max-height:100%;}
+.modal-dialog-scrollable .modal-content > form > .modal-body{overflow-y:auto;}
+
+/* Avisos: los mismos tonos que los badges de estado, sin colores nuevos */
+.alert{border-radius:var(--radius);border-width:1px;}
+.alert-success{background:var(--verde-tinte);border-color:var(--verde-borde);color:var(--verde);}
+.alert-danger{background:var(--rojo-tinte);border-color:var(--rojo-borde);color:var(--rojo);}
+.alert-warning{background:var(--ambar-tinte);border-color:var(--ambar-borde);color:var(--ambar);}
+.alert-info{background:var(--fondo);border-color:var(--borde);color:var(--texto-tenue);}
+
+/* Texto secundario, en el verde agua medio de la identidad.
+   El contorno de un campo va en `--borde-control` y no en el verde claro
+   de los separadores: WCAG pide 3:1 para el borde de un control. */
+.form-text,.text-muted{color:var(--texto-tenue)!important;}
+.input-group-text{background:var(--fondo);border-color:var(--borde);color:var(--texto-tenue);}
+.form-control,.form-select{border-color:var(--borde-control);color:var(--texto);}
+.form-control::placeholder{color:var(--placeholder);}
+.form-control:disabled,.form-select:disabled{background:var(--fondo);}
+
+/* ---- Utilidades ---- */
+.text-muted-warm{color:var(--texto-tenue)!important;}
+/* Para no escribir colores a mano en las vistas */
+.txt-ok{color:var(--verde);}
+.txt-no{color:var(--rojo);}
+.txt-acento{color:var(--acento-enfasis);}
+
+/* ---- Selector de disponibilidad ----
+   Los días y las horas son atajos de navegación, así que usan el nivel
+   secundario del oro (.sgp-chip) con sus tres estados. El elegido queda en
+   oro macizo, que es lo único seleccionado de la pantalla. *
+.agenda-aviso{margin:.3rem 0;}
+
+/* ---- Comprobante (detalle e impresión de factura) ----
+   El oro aparece solo en el número del comprobante y en el total: son los dos
+   datos que se buscan primero. El resto va en los neutros cálidos. */
+.sgp-comprobante{border-top:3px solid var(--acento);position:relative;}
+/* Sello de anulada: no debe poder confundirse con un comprobante válido *
+
+/* ---- Impresión ----
+   Se imprime solo el comprobante: fuera la barra superior, los accesos rápidos,
+   los botones y el listado de cobros (que es información interna). */
+@media print{
+  /* **Todo lo que sirve para navegar sobra en el papel.** `.sgp-nav` no
+     estaba en esta lista, así que la barra de módulos y su desplegable
+     salían impresos encima del comprobante: en la hoja aparecían «Panel ·
+     Citas · Clientes · Tesorería» y los enlaces del menú, que en pantalla
+     el hover mantiene ocultos pero al imprimir se dibujan todos. */
+  .sgp-topbar,.sgp-nav,.sgp-nav-menu,.sgp-migas,
+  .no-imprimir,.alert,footer,.sgp-footer{display:none !important;}
+  body{background:#fff;}
+  main.container{padding:0 !important;max-width:100% !important;}
+  .sgp-comprobante{border:none;padding:0;}
+  a[href]:after{content:none !important;}
+  .table{font-size:.82rem;}
+}
+
+/* ---- Responsive (móviles) ---- */
+html,body{max-width:100%;overflow-x:hidden;}
+@media (max-width:768px){
+  .sgp-cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.7rem;}
+}
+@media (max-width:576px){
+  .sgp-topbar{padding:.6rem .9rem;}
+  .sgp-brand-name{font-size:.95rem;}
+  .sgp-user{gap:.55rem;font-size:.8rem;}
+  .sgp-user .sgp-user-nombre{display:none;}      /* en móvil, solo ícono + rol + salir */
+  .sgp-page-head h1{font-size:1.15rem;}
+  .sgp-cards{grid-template-columns:1fr 1fr;gap:.6rem;}
+  .sgp-card{padding:.9rem;}
+  .sgp-card .ic{width:38px;height:38px;font-size:1.2rem;}
+  .sgp-card h3{font-size:.92rem;margin-top:.6rem;}
+  .sgp-card p{font-size:.72rem;}
+  .sgp-metric .val{font-size:1.35rem;}
+  .sgp-panel{padding:.9rem;}
+  .table{font-size:.85rem;}
+  .btn{font-size:.9rem;}
+}
+@media (max-width:380px){
+  .sgp-cards{grid-template-columns:1fr;}
+}
+
+/* ---------------------------------------------------------------------
+   Móvil: que la cabecera y la barra respiren.
+
+   Las dos son pegajosas y se apilan, así que en una pantalla de 5" se
+   comían un tercio del alto útil antes de mostrar nada. El encabezado
+   traía el padding del escritorio, la barra de módulos el suyo, y entre
+   la ficha de la sucursal y la del rol la fila se desbordaba.
+
+   Nada de esto esconde información: lo que se achica es el aire, y lo
+   único que se oculta —el subtítulo «SISTEMA DE GESTIÓN»— es decorativo
+   y está repetido en el pie.
+   --------------------------------------------------------------------- */
+@media (max-width:576px){
+  .sgp-topbar{padding:.45rem .7rem;gap:.5rem;}
+  .sgp-brand{gap:.45rem;}
+  .sgp-brand-name{font-size:.9rem;}
+
+  /* La barra queda pegada a la cabecera achicada, no a los 52 px de antes:
+     con el valor viejo dejaba una franja muerta encima. */
+  .sgp-nav{top:44px;}
+  .sgp-nav-in{padding:0 .4rem;gap:0;}
+  .sgp-nav-item{padding:.45rem .55rem;font-size:.78rem;gap:.28rem;}
+
+  /* La ficha del rol sale: la sucursal es lo que cambia entre sesiones y
+     por eso es la que se queda (7.31.1). El rol sigue en Mi cuenta. */
+  .sgp-rol-chip{display:none;}
+
+  /* El scroll horizontal de la barra sin la barrita gris encima, que en
+     táctil no hace falta y roba 6 px de alto. */
+  .sgp-nav-in::-webkit-scrollbar{display:none;}
+  .sgp-nav-in{scrollbar-width:none;}
+}
+
+/* ---------------------------------------------------------------------
+   Días de la semana de un turno
+   Es una casilla marcada, no un atajo: por eso usa el oro de
+   .form-check-input:checked y no los tres estados de .sgp-chip.
+   La casilla real queda oculta pero sigue ahí, así el teclado y el lector
+   de pantalla la encuentran igual.
+   --------------------------------------------------------------------- */
+.sgp-dias{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;}
+.sgp-horas{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;}
+
+/* En el portal «Reservar» y «Mis citas» pertenecen a Citas. En móvil el
+   grupo es un desplegable nativo (funciona aunque no cargue JavaScript) y no
+   roba ancho a la barra. */
+
+@media (max-width:576px){
+  .sgp-portal-citas-grid .table thead{display:none;}
+  .sgp-portal-citas-grid .table tbody tr{display:block;border-bottom:1px solid var(--borde);padding:.65rem 0;}
+  .sgp-portal-citas-grid .table tbody tr:last-child{border-bottom:0;}
+  .sgp-portal-citas-grid .table tbody td{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem;border:0;padding:.18rem 0;text-align:right;white-space:normal;}
+  .sgp-portal-citas-grid .table tbody td:first-child{font-weight:600;}
+  .sgp-portal-citas-grid .table tbody td:last-child{justify-content:flex-end;flex-wrap:wrap;}
+}
+
+/* ---- Selector de agenda: el día y la hora se eligen con COMBOS ----
+   Antes eran fichas: con dos meses de agenda, cincuenta botones que hay que
+   recorrer con la vista, y en el celular varias pantallas de scroll. Tres
+   combos —mes, día y hora— dicen lo mismo en dos renglones, y el navegador
+   ya sabe abrirlos en cualquier dispositivo.
+
+   No hay oro acá y es a propósito: elegir la fecha no es la acción principal
+   de la pantalla, es un paso para llegar a ella. El oro se lo lleva el botón
+   de reservar, que es lo que la regla del oro pide. */
+.sgp-agenda-fila{
+  display:flex;flex-wrap:wrap;gap:.6rem;width:100%;
+}
+.sgp-agenda-campo{flex:1 1 9rem;min-width:8rem;}
+.sgp-agenda-campo .form-label{
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--texto-tenue);margin-bottom:.15rem;
+}
+/* Las horas en cifras tabulares: alineadas, la lista se recorre más rápido. */
+.sgp-agenda-campo select{font-variant-numeric:tabular-nums;}
+
+/* **En el celular cada combo se lleva el renglón entero.**
+
+   Con `flex:1 1 9rem` entraban dos por fila, y en una pantalla de 375 px eso
+   deja unos 166 px por combo: «septiembre de 2026» no cabe y el navegador lo
+   corta a «septiembre de 2(». Se reportó como que el selector de fecha «sigue
+   siendo muy compacto», y es exactamente eso — el mes es el texto más largo
+   de los tres y es el primero que se lee.
+
+   De paso el control crece: 44 px de alto es el mínimo cómodo para el dedo, y
+   estos tres se tocan uno tras otro. */
+@media (max-width:575.98px){
+  .sgp-agenda-campo{flex:1 1 100%;min-width:0;}
+  .sgp-agenda-campo select{font-size:1rem;padding-top:.5rem;padding-bottom:.5rem;}
+  .sgp-agenda-campo .form-label{font-size:.75rem;}
+}
+.sgp-dia{cursor:pointer;user-select:none;}
+.sgp-dia input{position:absolute;opacity:0;width:0;height:0;}
+.sgp-dia span{
+  display:inline-block;min-width:2.6rem;text-align:center;
+  border:1px solid var(--borde);border-radius:20px;
+  padding:.22rem .55rem;font-size:.78rem;color:var(--texto-tenue);
+  background:var(--superficie);transition:.12s;
+}
+.sgp-dia input:checked + span{
+  background:var(--acento-suave);border-color:var(--acento);color:var(--acento-texto);font-weight:600;
+}
+.sgp-dia input:focus-visible + span{outline:2px solid var(--acento);outline-offset:2px;}
+.sgp-dia:hover span{border-color:var(--acento);}
+
+/* =====================================================================
+   PROTOTIPO DE LISTADO
+   Migas · encabezado · barra de filtros · paginación.
+   Las tres piezas salen de parciales de layout/, así que este bloque es
+   el único lugar donde se les toca el aspecto: cambiarlo acá lo cambia
+   en las treinta pantallas.
+   ===================================================================== */
+
+/* ---- Migas de pan: dónde estoy y cómo vuelvo ---- */
+.sgp-migas{
+  display:flex;align-items:center;flex-wrap:wrap;gap:.3rem;
+  font-size:.78rem;color:var(--texto-tenue);padding:.55rem 0 .1rem;
+}
+.sgp-migas a{color:var(--texto-tenue);text-decoration:none;display:inline-flex;align-items:center;gap:.28rem;}
+.sgp-migas a:hover,.sgp-migas a:focus-visible{color:var(--acento-enfasis);text-decoration:underline;}
+.sgp-migas span[aria-current]{color:var(--texto);font-weight:500;}
+.sgp-miga-sep{font-size:.62rem;color:var(--borde);}
+
+/* ---- Encabezado de pantalla ---- */
+.sgp-head-flex{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:.8rem;}
+.sgp-head-txt{min-width:0;}
+.sgp-head-acciones{display:flex;gap:.5rem;flex-wrap:wrap;}
+
+/* ---- Barra de filtros ---- */
+.sgp-filtros{
+  display:flex;flex-wrap:wrap;align-items:flex-end;gap:.6rem;
+  background:var(--fondo);border:1px solid var(--borde);
+  border-radius:var(--radius);padding:.75rem .9rem;margin-bottom:1rem;
+}
+/* La casilla que pliega los filtros en el celular: nunca se dibuja. La
+   etiqueta que la acciona sólo existe en pantalla angosta (ver la media
+   query de las tarjetas móviles). */
+.sgp-filtros-int{position:absolute;opacity:0;width:0;height:0;pointer-events:none;}
+.sgp-filtros-plegar{display:none;}
+.sgp-filtros .form-label{
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--texto-tenue);margin-bottom:.2rem;font-weight:500;
+}
+.sgp-filtro{min-width:130px;}
+.sgp-filtro-btns{display:flex;gap:.4rem;align-items:center;padding-bottom:.05rem;margin-left:auto;}
+/* El aviso va en --acento-tinte, no en --acento-suave: es información, no acción.
+   (Ver la regla del oro: el tinte es para badges y avisos.) */
+.sgp-filtro-aviso{
+  flex-basis:100%;font-size:.75rem;color:var(--acento-enfasis);
+  background:var(--acento-tinte);border-radius:6px;padding:.25rem .6rem;
+  display:inline-flex;align-items:center;gap:.35rem;width:fit-content;
+}
+
+/* ---- Pie del listado: conteo + páginas ---- */
+.sgp-paginacion{
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.7rem;
+  border-top:1px solid var(--borde);margin-top:.2rem;padding-top:.8rem;
+}
+.sgp-pag-conteo{font-size:.82rem;color:var(--texto-tenue);}
+.sgp-pag-conteo strong{color:var(--texto);font-variant-numeric:tabular-nums;}
+.sgp-pag-botones{display:flex;gap:.25rem;flex-wrap:wrap;}
+.sgp-pag{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:2rem;height:2rem;padding:0 .45rem;
+  border:1px solid var(--borde);border-radius:7px;background:var(--superficie);
+  color:var(--texto-tenue);text-decoration:none;font-size:.82rem;
+  font-variant-numeric:tabular-nums;transition:.12s;
+}
+.sgp-pag:hover,.sgp-pag:focus-visible{border-color:var(--acento);color:var(--acento-texto);background:var(--acento-suave);}
+/* La página actual es jerarquía, no adorno: por eso lleva el oro macizo */
+.sgp-pag.activo{background:var(--acento);border-color:var(--acento-oscuro);color:var(--sobre-acento);font-weight:600;}
+.sgp-pag.inactivo{opacity:.4;pointer-events:none;}
+.sgp-pag-puntos{color:var(--texto-tenue);padding:0 .15rem;align-self:center;font-size:.8rem;}
+
+/* ---- Fila vacía de una tabla ---- */
+/* ---------------------------------------------------------------
+   Tarjetas de servicio al reservar, con su imagen de referencia.
+
+   **La tarjeta entera es un `<label>`**, así que marca el checkbox sin
+   JavaScript: con `app.js` caído se sigue pudiendo reservar.
+
+   El oro va SÓLO en la elegida —borde y marca— que es donde hay jerarquía;
+   el resto queda en neutros cálidos. Si el oro estuviera en las quince
+   tarjetas, la elegida dejaría de distinguirse.
+   --------------------------------------------------------------- */
+.sgp-srv-grid{display:grid;gap:.75rem;
+  grid-template-columns:repeat(auto-fill,minmax(170px,1fr));}
+
+/* **El catálogo NO scrollea adentro suyo, y eso se probó al revés.**
+
+   La 7.108.0 le puso `max-height:65vh` con `overflow-y:auto` en el celular,
+   para que la página de reservar no midiera varias pantallas de alto. El
+   remedio salió peor que la enfermedad y así se reportó: **una caja que
+   scrollea adentro de una página que también scrollea le roba el gesto al
+   dedo**. Con el catálogo ocupando el centro de la pantalla —que es donde
+   queda— deslizar hacia abajo mueve la lista y no la página, así que para
+   llegar al botón hay que buscar el borde de 20 px que queda libre a los
+   costados y deslizar por ahí.
+
+   Un `overscroll-behavior:contain` empeora justamente eso: es lo que impide
+   que al llegar al final el scroll se contagie a la página.
+
+   El alto se acota donde no cuesta nada —el asistente muestra un paso por vez
+   desde la 7.110.0, así que el catálogo ya no compite con el selector de fecha
+   ni con el botón— y el gesto vuelve a ser uno solo en toda la pantalla. */
+
+.sgp-srv-card{display:flex;flex-direction:column;
+  border:1px solid var(--borde);border-radius:10px;overflow:hidden;
+  background:var(--superficie);transition:border-color .15s,box-shadow .15s;}
+.sgp-srv-card:hover{border-color:var(--acento-claro);}
+/* Lo que de verdad marca el servicio. El combo de profesional queda FUERA de
+   esta etiqueta: adentro, el desplegable del navegador no abre en el celular. */
+.sgp-srv-toque{display:flex;flex-direction:column;cursor:pointer;flex:1 1 auto;}
+.sgp-srv-extra{padding:0 .6rem .6rem;}
+.sgp-srv-extra .form-select{width:100%;}
+/* «¿Para quién?» de la cita de varias personas. Va aparte de `.sgp-srv-extra`
+   porque ése se muda entero al paso «Profesionales» y esta pregunta es del
+   paso de los servicios. Sólo aparece con más de una persona (app.js). */
+.sgp-srv-para{padding:0 .6rem .6rem;border-top:1px dashed var(--borde);margin-top:.2rem;padding-top:.45rem;}
+.sgp-srv-para .form-label{font-size:.78rem;color:var(--texto-tenue);}
+.sgp-srv-para-lista{display:flex;flex-wrap:wrap;gap:.1rem .5rem;}
+.sgp-srv-para-lista .form-check{margin-right:0;font-size:.8rem;}
+.sgp-srv-para-lista .form-check-input{margin-top:.2rem;}
+.sgp-srv-card.elegida{border-color:var(--acento);box-shadow:0 0 0 2px var(--acento-suave);}
+
+/* `aspect-ratio` y no una altura fija: así la grilla no se desalinea cuando
+   una foto viene más alta que otra. */
+.sgp-srv-img{position:relative;aspect-ratio:4/3;background:var(--fondo);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;}
+.sgp-srv-img img{width:100%;height:100%;object-fit:cover;display:block;}
+
+.sgp-srv-sinimg{display:flex;flex-direction:column;align-items:center;gap:.2rem;
+  color:var(--texto-tenue);text-align:center;padding:.5rem;}
+.sgp-srv-sinimg i{font-size:1.5rem;opacity:.5;}
+.sgp-srv-sinimg span{font-size:.68rem;line-height:1.2;}
+
+/* El check va sobre la imagen, no debajo del texto: es lo que se toca y tiene
+   que verse sin buscarlo. */
+.sgp-srv-check{position:absolute;top:.4rem;left:.4rem;width:1.15rem;height:1.15rem;
+  box-shadow:0 0 0 2px var(--superficie);}
+
+.sgp-srv-cuerpo{padding:.5rem .6rem .6rem;display:flex;flex-direction:column;gap:.15rem;}
+.sgp-srv-nombre{font-size:.87rem;font-weight:500;line-height:1.25;}
+.sgp-srv-desc{font-size:.74rem;color:var(--texto-tenue);line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.sgp-srv-precio{font-size:1rem;font-weight:600;color:var(--acento-texto);}
+/* El de lista tachado, en neutro: lo que se lee de una es lo que va a pagar,
+   y el tachado está para explicar por qué el otro número es más chico. */
+.sgp-srv-lista{color:var(--texto-tenue);font-weight:400;font-size:.82rem;margin-right:.25rem;}
+.sgp-srv-off{font-size:.66rem;vertical-align:middle;}
+.sgp-srv-dur{font-size:.73rem;color:var(--texto-tenue);}
+
+/* **En el celular la tarjeta se achica, y sobre todo la foto.**
+
+   Con `minmax(170px,1fr)` y una pantalla de 360 px no entran dos columnas
+   —360 menos el gap da 174 por columna, apenas por debajo del mínimo— así que
+   la grilla cae a UNA sola: cada tarjeta ocupa el ancho entero y su imagen 4/3
+   queda de unos 260 px de alto. Con quince servicios eso son varias pantallas
+   de scroll para elegir, que es justo lo contrario de lo que las tarjetas
+   vinieron a resolver.
+
+   Se baja el mínimo para que entren dos, y la foto pasa a 3/2 —más apaisada,
+   así la tarjeta es más baja sin recortar de más—. En el escritorio no cambia
+   nada. */
+@media (max-width:575.98px){
+  .sgp-srv-grid{gap:.5rem;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));}
+  .sgp-srv-img{aspect-ratio:3/2;}
+  .sgp-srv-cuerpo{padding:.4rem .45rem .5rem;}
+  .sgp-srv-extra{padding:0 .45rem .5rem;}
+  .sgp-srv-nombre{font-size:.8rem;}
+  .sgp-srv-precio{font-size:.9rem;}
+  .sgp-srv-desc{-webkit-line-clamp:1;}
+
+  /* **La tarjeta elegida NO cambia de tamaño**, y eso es lo que se pidió.
+
+     La 7.107.0 le daba el renglón entero (`grid-column:1/-1`) y le aplanaba la
+     foto, porque adentro vivía el combo de «quién me atiende» y en 156 px no
+     se leía. Visto desde el dedo eso es otra cosa: **la grilla se reacomoda
+     sola en cuanto se marca algo** —la tarjeta crece, las de abajo saltan de
+     lugar— y elegir el segundo servicio pasa a ser apuntarle a un blanco que
+     se acaba de mover.
+
+     El motivo de aquella regla desapareció: el combo ya no se dibuja acá
+     mientras el asistente esté andando (ver `.sgp-wiz-on` más abajo), porque
+     el paso «Profesionales» pregunta exactamente eso una pantalla después.
+     Sin combo adentro, la tarjeta no necesita crecer para nada.
+
+     Lo que marca la elegida sigue siendo el oro del borde, que no ocupa un
+     píxel de más. */
+  .sgp-srv-extra .form-select{font-size:.85rem;padding-top:.42rem;padding-bottom:.42rem;}
+}
+
+/* ---------------------------------------------------------------
+   AYUDA CONTEXTUAL (`<x-ayuda>`)
+
+   El ícono que guarda la explicación hasta que alguien la pide. Es el
+   patrón de Moodle, traído a la paleta del salón: la información no se
+   saca de la pantalla, se guarda — con quince campos a la vista, un
+   párrafo por renglón obliga a leer por encima de todo cada vez.
+
+   **El oro va acá porque es acción, no adorno**: se toca y pasa algo.
+   En reposo va en `--acento-texto` sobre transparente, para que no compita
+   con el botón principal de la pantalla; recién al pasar el mouse o al
+   abrirse toma el oro suave de fondo.
+   --------------------------------------------------------------- */
+.sgp-ayuda{display:inline-flex;align-items:center;justify-content:center;
+  width:1.15rem;height:1.15rem;padding:0;margin-left:.3rem;vertical-align:-.15em;
+  border:0;border-radius:50%;background:transparent;color:var(--acento-texto);
+  font-size:.92rem;line-height:1;cursor:pointer;
+  transition:background-color .15s,color .15s;}
+.sgp-ayuda:hover,.sgp-ayuda:focus{background:var(--acento-suave);color:var(--acento-texto);outline:0;}
+.sgp-ayuda:focus-visible{box-shadow:0 0 0 2px var(--acento);}
+.sgp-ayuda i{display:block;}
+
+/* El globo, con los mismos neutros cálidos que el resto. Bootstrap lo
+   dibuja con sus propias variables, así que se pisan las de él y no se
+   escriben reglas nuevas: así el tema oscuro lo da vuelta solo. */
+.popover{--bs-popover-bg:var(--superficie);
+  --bs-popover-border-color:var(--borde);
+  --bs-popover-header-bg:var(--acento-tinte);
+  --bs-popover-header-color:var(--acento-texto);
+  --bs-popover-body-color:var(--texto);
+  --bs-popover-max-width:280px;
+  --bs-popover-font-size:.83rem;
+  --bs-popover-border-radius:10px;
+  box-shadow:0 6px 18px rgba(0,0,0,.12);}
+.popover .popover-header{font-weight:600;font-size:.84rem;}
+
+/* En el celular el globo se acota al ancho de la pantalla: con 280 px
+   fijos se sale del borde cuando el ícono está a la derecha. */
+@media (max-width:575.98px){
+  .popover{--bs-popover-max-width:min(280px,calc(100vw - 2rem));}
+}
+
+/* La miniatura de la ficha del servicio, donde se sube la imagen. */
+.sgp-srv-mini{width:120px;height:90px;object-fit:cover;border-radius:8px;
+  border:1px solid var(--borde);}
+
+/* Los pasos numerados de un formulario largo. El número va en oro suave y no
+   en oro macizo: es jerarquía, no acción — el oro lleno se reserva para lo que
+   hay que apretar. */
+.sgp-paso{display:flex;align-items:center;gap:.5rem;margin:0 0 .5rem;
+  padding-top:.35rem;border-top:1px solid var(--borde);}
+.sgp-paso:first-of-type{border-top:none;padding-top:0;}
+.sgp-paso-n{display:inline-flex;align-items:center;justify-content:center;
+  width:1.4rem;height:1.4rem;border-radius:50%;flex:0 0 auto;
+  background:var(--acento-suave);color:var(--acento-texto);
+  font-size:.78rem;font-weight:600;}
+.sgp-paso-t{font-size:.92rem;font-weight:600;}
+
+/* A dónde transferir la seña. Va en neutros y NO en oro: es un dato para
+   copiar, no una acción ni una jerarquía — el oro se reserva para lo que hay
+   que tocar. El número sí va en monoespaciada, que es lo que hace que no se
+   copie mal un dígito. */
+.sgp-cuentas-tit{font-size:.82rem;font-weight:600;color:var(--texto-tenue);
+  margin-bottom:.4rem;}
+.sgp-cuenta{border:1px solid var(--borde);border-radius:8px;
+  padding:.55rem .7rem;margin-bottom:.45rem;background:var(--fondo);}
+.sgp-cuenta:last-child{margin-bottom:0;}
+.sgp-cuenta-cab{font-size:.86rem;margin-bottom:.35rem;
+  padding-bottom:.3rem;border-bottom:1px solid var(--borde);}
+.sgp-cuenta-nro{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:1.02rem;letter-spacing:.02em;word-break:break-all;display:block;}
+
+/* **Cada dato con su rótulo.** Antes los valores salían sueltos y pegados con
+   puntos —«Ana Garcia · 456123 · Caja de ahorro»— así que ningún número decía
+   qué era. Es una grilla de dos columnas y no una tabla: con `minmax` el
+   rótulo no empuja al valor fuera de la tarjeta en un teléfono angosto. */
+/* La columna del rótulo da para «ALIAS (Nº DE CELULAR)», que es el más largo:
+   el tipo de alias pasó a vivir ahí en la 7.112.0, y con 7,5 rem partía en dos
+   renglones. */
+.sgp-cuenta-dato{display:grid;grid-template-columns:minmax(0,9.2rem) 1fr;
+  gap:.2rem .6rem;align-items:baseline;padding:.18rem 0;}
+.sgp-cuenta-rot{font-size:.76rem;color:var(--texto-tenue);text-transform:uppercase;
+  letter-spacing:.03em;}
+.sgp-cuenta-val{font-size:.9rem;min-width:0;word-break:break-word;}
+@media (max-width:420px){
+  /* En un teléfono angosto la grilla de dos columnas deja el valor en 4 rem:
+     un número de cuenta no entra. Rótulo arriba, valor abajo. */
+  .sgp-cuenta-dato{grid-template-columns:1fr;gap:0;}
+}
+
+.sgp-cuenta-obs{font-size:.79rem;color:var(--texto-tenue);margin-top:.35rem;
+  padding-top:.3rem;border-top:1px dashed var(--borde);}
+
+.sgp-vacio{text-align:center;color:var(--texto-tenue);padding:2.2rem 1rem;}
+.sgp-vacio i{font-size:1.7rem;color:var(--borde);display:block;margin-bottom:.4rem;}
+.sgp-vacio .t{font-size:.92rem;color:var(--texto);margin-bottom:.15rem;}
+.sgp-vacio .d{font-size:.8rem;}
+
+/* Resumen de lo que está mostrando el filtro (total cobrado, stock actual…).
+   Va en oro tinte porque informa, no es un botón. *
+
+/* Aviso de bloque (caja cerrada, sin timbrado…). El color del borde
+   izquierdo es el que comunica: rojo si algo está mal, oro si es un aviso. *
+
+/* ---- Informes: atajos de período y cabecera de bloque ---- *
+
+/* =====================================================================
+   ENCABEZADO, NAVEGACIÓN Y PIE
+   ===================================================================== */
+
+/* ---- Marca con bajada ---- */
+.sgp-brand-txt{display:flex;flex-direction:column;line-height:1.15;}
+/* `.sgp-brand-sub` —«Sistema de gestión» bajo el nombre del salón— se fue al
+   rehacer la barra: ahí arriba competía con el nombre, que es lo que hay que
+   leer. Sigue estando en las pantallas de acceso, que es donde presenta al
+   sistema a alguien que todavía no entró. */
+
+/* Cabecera del desplegable de la cuenta */
+.sgp-drop-cabecera{display:flex;flex-direction:column;line-height:1.3;padding:.25rem 1rem;}
+.sgp-drop-cabecera strong{font-size:.88rem;color:var(--texto);}
+.sgp-drop-cabecera span{font-size:.75rem;color:var(--texto-tenue);}
+
+/* ---- Panel de navegación: los módulos siempre a la vista ----
+   Va en carbón, un escalón más claro que la barra negra de arriba, para que
+   se lean como dos niveles y no como una sola franja negra. El módulo actual
+   se marca con el oro: es jerarquía —dónde estoy—, no decoración. */
+.sgp-nav{background:var(--sup-oscura-2);border-bottom:1px solid var(--sup-oscura-borde);position:sticky;top:52px;z-index:1020;}
+.sgp-nav-in{
+  display:flex;gap:.15rem;overflow-x:auto;scrollbar-width:thin;
+  max-width:1320px;margin:0 auto;padding:0 .8rem;
+}
+.sgp-nav-item{
+  display:inline-flex;align-items:center;gap:.4rem;white-space:nowrap;
+  padding:.6rem .8rem;color:var(--sobre-oscura);text-decoration:none;font-size:.82rem;
+  border-bottom:2px solid transparent;transition:color .13s,border-color .13s;
+}
+.sgp-nav-item i{font-size:.95rem;opacity:.85;}
+.sgp-nav-item:hover,.sgp-nav-item:focus-visible{color:var(--sobre-oscura-vivo);}
+.sgp-nav-item.activo{color:var(--sobre-oscura-vivo);border-bottom-color:var(--acento-sobre-oscura);font-weight:600;}
+.sgp-nav-item.activo i{opacity:1;}
+
+/* ---- El módulo se abre al pasar el mouse ----
+   Llegar a una pantalla eran dos clics con una tarjeta de por medio, y eso se
+   hace veinte veces por día. El desplegable es un ATAJO: el enlace del módulo
+   sigue llevando a su tarjeta, así que nada depende de que esto funcione.
+
+   Tres decisiones que no son adorno y conviene no perder al tocarlo:
+
+   · **Se abre con CSS, no con JavaScript.** Si `app.js` no cargó, la barra
+     sigue navegando igual — la misma regla que la salida de la pantalla de la
+     huella.
+   · **Sólo donde hay mouse de verdad** (`hover:hover`). En una pantalla táctil
+     el hover no existe y el navegador lo emula con el primer toque: tocar
+     «Clientes» abriría el menú en vez de entrar al módulo, o sea que el atajo
+     rompería la navegación normal. Ahí la barra se queda como estaba.
+   · **`overflow` vuelve a `visible` en ese caso.** `.sgp-nav-in` scrollea en
+     horizontal para las pantallas angostas, y un desplegable dentro de un
+     contenedor con overflow se recorta: se vería la primera línea y nada más. */
+/* El interruptor del acordeón del cajón: en escritorio no existe. */
+.sgp-nav-int{position:absolute;opacity:0;width:0;height:0;pointer-events:none;}
+.sgp-nav-tog{display:none;}
+.sgp-nav-todo{display:none !important;}
+
+@media (hover:hover) and (min-width:768px) {
+  .sgp-nav-in{overflow:visible;}
+  .sgp-nav-grupo{position:relative;display:inline-flex;}
+  .sgp-nav-flecha{font-size:.6rem !important;opacity:.5 !important;margin-left:-.15rem;
+                  transition:transform .13s,opacity .13s;}
+  .sgp-nav-grupo:hover .sgp-nav-flecha,
+  .sgp-nav-grupo:focus-within .sgp-nav-flecha{opacity:.9 !important;transform:rotate(180deg);}
+
+  .sgp-nav-menu{
+    position:absolute;top:100%;left:0;min-width:210px;z-index:1030;
+    background:var(--sup-oscura);border:1px solid var(--sup-oscura-borde);
+    border-top:2px solid var(--acento-sobre-oscura);border-radius:0 0 6px 6px;
+    box-shadow:0 8px 24px rgba(0,0,0,.35);padding:.3rem;
+    /* Oculto pero enfocable no sirve: `display:none` saca los enlaces del
+       recorrido del teclado y `:focus-within` no podría dispararse nunca. */
+    /* `visibility:hidden` y no `display:none` para poder animarlo. Los dos
+       sacan los enlaces del recorrido del teclado, y está bien que así sea: el
+       menú cerrado no es navegable. Lo que hace andar el teclado es que el
+       disparador de `:focus-within` es el enlace del módulo, que SIEMPRE es
+       visible y enfocable — al llegarle con Tab el menú se abre y recién
+       entonces sus enlaces entran al recorrido. */
+    opacity:0;visibility:hidden;transform:translateY(-4px);
+    transition:opacity .13s,transform .13s,visibility .13s;
+  }
+  .sgp-nav-grupo:hover .sgp-nav-menu,
+  .sgp-nav-grupo:focus-within .sgp-nav-menu{opacity:1;visibility:visible;transform:none;}
+
+  .sgp-nav-menu a{
+    display:flex;align-items:center;gap:.55rem;white-space:nowrap;
+    padding:.45rem .6rem;border-radius:4px;
+    color:var(--sobre-oscura);text-decoration:none;font-size:.8rem;
+  }
+  .sgp-nav-menu a i{font-size:.9rem;opacity:.7;width:1rem;text-align:center;}
+  .sgp-nav-menu a:hover,.sgp-nav-menu a:focus-visible{background:var(--sup-oscura-2);color:var(--sobre-oscura-vivo);}
+  .sgp-nav-menu a:hover i,.sgp-nav-menu a:focus-visible i{opacity:1;}
+  .sgp-nav-menu a.activo{color:var(--acento-sobre-oscura);font-weight:500;}
+  .sgp-nav-menu a.activo i{opacity:1;}
+
+  /* El último módulo queda pegado al borde derecho: su menú se alinea al
+     revés para no salirse de la pantalla. */
+  .sgp-nav-grupo:last-child .sgp-nav-menu{left:auto;right:0;}
+
+  /* ---- El submenú que abre AL COSTADO ----
+     Tesorería tiene ocho pantallas y con los rótulos intercalados el menú
+     medía doce renglones para elegir uno. Agrupado son cuatro —Facturación,
+     Cobros, Caja, Pagos— y cada uno abre su división a un costado, que es lo
+     que pidió el usuario. El grupo de una sola pantalla no abre nada: se
+     dibuja como enlace directo (lo decide el marcado, no el CSS). */
+  .sgp-nav-sub-wrap{position:relative;}
+  .sgp-nav-sub-flecha{margin-left:auto;font-size:.65rem !important;opacity:.45 !important;}
+  .sgp-nav-sub-wrap:hover .sgp-nav-sub-flecha,
+  .sgp-nav-sub-wrap:focus-within .sgp-nav-sub-flecha{opacity:.9 !important;}
+  .sgp-nav-sub{
+    position:absolute;left:100%;top:-.3rem;min-width:13rem;
+    background:var(--sup-oscura);border:1px solid var(--sup-oscura-borde);
+    border-radius:var(--radius);padding:.3rem 0;
+    box-shadow:0 8px 24px rgba(0,0,0,.35);
+    opacity:0;visibility:hidden;transform:translateX(-4px);
+    transition:opacity .12s ease,transform .12s ease;z-index:1;}
+  .sgp-nav-sub-wrap:hover>.sgp-nav-sub,
+  .sgp-nav-sub-wrap:focus-within>.sgp-nav-sub{opacity:1;visibility:visible;transform:none;}
+  /* Si el módulo cae a la derecha de la pantalla, su submenú también se da
+     vuelta: si no, se sale por el borde y no se puede leer. */
+  .sgp-nav-grupo:last-child .sgp-nav-sub{left:auto;right:100%;transform:translateX(4px);}
+  .sgp-nav-grupo:last-child .sgp-nav-sub-wrap:hover>.sgp-nav-sub{transform:none;}
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .sgp-nav-menu,.sgp-nav-flecha,.sgp-nav-sub{transition:none;}
+}
+
+/* ---- Pie ---- */
+.sgp-footer{background:var(--sup-oscura);color:var(--sobre-oscura);margin-top:2.5rem;}
+/* Las secciones van en tres columnas, no en una lista larga: apiladas
+   estiraban el pie y dejaban una franja negra enorme abajo. */
+/* Con solo dos bloques, una grilla a lo ancho de 1320px los tiraba contra los
+   bordes opuestos y dejaba un vacío enorme en el medio. Se los trata como un
+   par centrado y con ancho acotado: se leen juntos, sin hueco. */
+.sgp-footer-in{
+  max-width:1240px;margin:0 auto;padding:1.7rem 1.2rem 1.1rem;
+  display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;
+  gap:1.5rem 2.5rem;
+}
+.sgp-footer-marca{flex:0 1 230px;}
+.sgp-footer-secciones{flex:0 1 440px;}
+.sgp-footer-ayuda{flex:0 1 200px;}
+.sgp-footer-version{flex:0 1 160px;}
+.sgp-footer-col h3{
+  font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--acento-sobre-oscura);margin:0 0 .6rem;font-weight:600;
+}
+.sgp-footer-col ul{list-style:none;margin:0;padding:0;}
+.sgp-footer-col li{margin-bottom:.3rem;font-size:.82rem;}
+.sgp-footer-col a{color:var(--sobre-oscura);text-decoration:none;}
+.sgp-footer-col a:hover,.sgp-footer-col a:focus-visible{color:var(--sobre-oscura-vivo);text-decoration:underline;}
+/* 3 columnas: con 8 secciones quedan 3 + 3 + 2.
+   `minmax(0,1fr)` y no `1fr` a secas: dentro de un contenedor que se encoge,
+   `1fr` se resuelve como max-content y cada columna toma el ancho de su enlace
+   más largo, así que los nombres quedaban desparejos en vez de alineados. */
+.sgp-footer-grid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:.2rem 1rem;width:100%;
+}
+.sgp-footer-logo{
+  display:flex;align-items:center;gap:.45rem;
+  color:var(--acento-sobre-oscura);font-size:1rem;font-weight:500;margin-bottom:.35rem;
+}
+.sgp-footer-tcc{font-size:.75rem;color:var(--sobre-oscura-tenue);margin:0;max-width:30ch;line-height:1.45;}
+/* El rótulo va centrado sobre la grilla de enlaces, no pegado al borde de la
+   columna. Se centra con flex y no con text-align para que el eje sea el mismo
+   para los dos: si se centrara cada uno por su cuenta respecto de la columna,
+   el título quedaría corrido cuando la grilla no ocupa todo el ancho. */
+.sgp-footer-secciones{display:flex;flex-direction:column;align-items:center;}
+.sgp-footer-secciones h3{text-align:center;}
+/* El contacto es una acción —abre el chat—, así que lleva el ícono en oro.
+   El texto se queda en el neutro del pie: si el renglón entero fuera dorado
+   competiría con el rótulo de la columna. */
+.sgp-contacto{display:inline-flex;align-items:center;gap:.4rem;}
+.sgp-contacto i{color:var(--acento-sobre-oscura);font-size:.95rem;}
+.sgp-contacto:hover i,.sgp-contacto:focus-visible i{color:var(--sobre-oscura-vivo);}
+
+/* Versión del sistema. El número va en oro porque es jerarquía —es el dato
+   del bloque—, y la fecha en el gris del pie. */
+.sgp-version-nro{
+  color:var(--acento-sobre-oscura);font-size:1.05rem;font-weight:500;
+  font-variant-numeric:tabular-nums;line-height:1.1;
+}
+.sgp-version-fecha{font-size:.75rem;color:var(--sobre-oscura-tenue);margin-top:.2rem;}
+.sgp-footer-pie{
+  border-top:1px solid var(--sup-oscura-borde);text-align:center;
+  padding:.85rem 1rem;font-size:.75rem;color:var(--sobre-oscura-tenue);
+  display:flex;justify-content:center;gap:.5rem;flex-wrap:wrap;
+}
+.sgp-footer-sep{color:var(--sup-oscura-borde);}
+
+@media (max-width:820px){
+  .sgp-footer-in{justify-content:flex-start;gap:1.2rem;}
+  .sgp-footer-marca,.sgp-footer-secciones,
+  .sgp-footer-ayuda,.sgp-footer-version{flex:1 1 100%;}
+  .sgp-footer-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .sgp-footer-secciones{align-items:flex-start;}
+  .sgp-footer-secciones h3{text-align:left;}
+  .sgp-nav{top:0;position:static;}
+}
+
+/* Subtítulo de una sección dentro de un formulario largo */
+.sgp-form-titulo{font-size:.95rem;font-weight:500;margin:0 0 .3rem;}
+.sgp-form-titulo i{color:var(--acento-enfasis);}
+
+/* Vista previa de cómo va a quedar el bloque del pie, dentro de Configuración.
+   Repite el fondo negro para que se vea tal cual, no como una lista suelta. *
+
+/* Campo de código de verificación. Antes cada pantalla lo estilaba con estilos
+   sueltos en el HTML; ahora es una clase y sale igual en las tres. *
+
+/* Niveles de fidelización: se leen como una escalera, de menos a más visitas */
+.sgp-niveles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;}
+.sgp-nivel{
+  border:1px solid var(--borde);border-radius:10px;padding:.65rem .8rem;background:var(--superficie);
+}
+.sgp-nivel-baja{opacity:.55;border-style:dashed;}
+.sgp-nivel-nombre{font-weight:500;color:var(--acento-enfasis);font-size:.92rem;}
+.sgp-nivel-req{font-size:.75rem;color:var(--texto-tenue);}
+.sgp-nivel-desc{font-size:.78rem;margin-top:.25rem;}
+.sgp-nivel-clientes{
+  font-size:.72rem;color:var(--texto-tenue);margin-top:.35rem;
+  border-top:1px dashed var(--borde);padding-top:.3rem;
+}
+
+/* Vuelto del mostrador. Es una cuenta de apoyo, no un dato que se guarde:
+   por eso va separado del resto del formulario con un borde punteado. */
+.sgp-vuelto{border-top:1px dashed var(--borde);padding-top:.8rem;}
+.sgp-vuelto-res{font-size:.87rem;min-height:1.2rem;}
+.sgp-vuelto-monto{
+  background:var(--acento-tinte);color:var(--acento-enfasis);font-weight:600;
+  border-radius:8px;padding:.35rem .7rem;display:inline-block;font-size:1rem;
+}
+
+/* Aviso de stock por reponer: los nombres de los productos en línea, para
+   que se sepa QUÉ falta sin tener que entrar a la lista. *
+
+/* Filas de medios de contacto: medio · valor · etiqueta · quitar *
+
+/* Servicio elegible, con su selector de quién lo hace *
+
+/* Aviso de dos servicios que no pueden ir a la vez *
+
+/* ---- Portal: la atención en curso ---- *
+
+/* --- Matriz de permisos (Configuración → Roles) -----------------------
+   Un bloque por rol, y adentro un recuadro por módulo con sus submódulos.
+   Reemplaza a la tabla rol × módulo: con los ocho módulos desglosados son
+   28 columnas, que no entran en ninguna pantalla y obligan a leer de
+   costado para saber qué se está marcando.
+   Todo en neutros cálidos; el oro queda para el módulo que tiene algo
+   marcado, que es la única jerarquía que hace falta ver de un vistazo. *
+/* El recuadro se tiñe cuando el módulo tiene algo dado: así se ve de lejos
+   el alcance del rol sin leer casilla por casilla. *
+
+/* =====================================================================
+   Señales de carga
+
+   Con navegación tradicional el navegador no da ninguna señal entre el
+   clic y la respuesta: con muchos datos cargados esa espera se lee como
+   «el sistema no responde», cuando en realidad está trabajando. Son tres
+   piezas, y cada una responde a una espera distinta:
+
+     .sgp-barra-carga   la página entera se está yendo a buscar
+     .btn.cargando      ese botón concreto disparó algo y está esperando
+     .sgp-spinner       un pedazo de pantalla se está llenando por fetch
+
+   Todo en oro, que es donde el sistema ya pone la acción.
+   ===================================================================== */
+
+/* --- Barra superior: la página se está cargando --------------------- */
+.sgp-barra-carga{
+  position:fixed;top:0;left:0;right:0;height:3px;z-index:2000;
+  background:transparent;pointer-events:none;
+  opacity:0;transition:opacity .15s ease;
+}
+.sgp-barra-carga.visible{opacity:1;}
+.sgp-barra-carga::before{
+  content:"";display:block;height:100%;width:40%;
+  background:linear-gradient(90deg,
+    transparent, var(--acento-claro) 25%, var(--acento-claro) 75%, transparent);
+  animation:sgp-barra 1.1s ease-in-out infinite;
+}
+@keyframes sgp-barra{
+  0%  {transform:translateX(-100%);}
+  100%{transform:translateX(350%);}
+}
+
+/* --- Botón esperando ------------------------------------------------ */
+/* El ícono se reemplaza por el spinner en su lugar: el botón no cambia
+   de ancho, así la fila no salta cuando hay varios en línea. */
+.btn.cargando{position:relative;pointer-events:none;}
+.btn.cargando > i{visibility:hidden;}
+.btn.cargando::after{
+  content:"";position:absolute;
+  top:50%;margin-top:-.45rem;
+  left:.75rem;
+  width:.9rem;height:.9rem;
+  border:2px solid currentColor;border-right-color:transparent;
+  border-radius:50%;opacity:.85;
+  animation:sgp-giro .6s linear infinite;
+}
+/* Sin ícono adentro el spinner no tiene dónde ir: se centra y se apaga
+   el texto, que si no queda montado encima. */
+.btn.cargando.sin-icono{color:transparent;}
+.btn.cargando.sin-icono::after{left:50%;margin-left:-.45rem;color:currentColor;}
+.btn-acento.cargando.sin-icono::after{border-color:var(--sobre-acento);border-right-color:transparent;}
+
+@keyframes sgp-giro{to{transform:rotate(360deg);}}
+
+/* --- Spinner suelto, para bloques que se llenan por fetch ----------- */
+.sgp-spinner{
+  display:inline-block;vertical-align:-.15em;
+  width:1rem;height:1rem;
+  border:2px solid var(--acento-suave);border-right-color:var(--acento);
+  border-radius:50%;
+  animation:sgp-giro .6s linear infinite;
+}
+.sgp-spinner.grande{width:1.6rem;height:1.6rem;border-width:3px;}
+
+/* Línea de «buscando…»: spinner + texto, en el tono de los muted */
+.sgp-cargando-texto{
+  display:inline-flex;align-items:center;gap:.5rem;
+  color:var(--texto-tenue);font-size:.85rem;
+}
+
+/* Bloque que se está actualizando: se apaga un poco y no se puede tocar,
+   así no se hace clic sobre datos que están por cambiar. */
+.sgp-actualizando{opacity:.5;pointer-events:none;transition:opacity .2s ease;}
+
+/* --- Respeto por quien pidió menos movimiento ----------------------- */
+@media (prefers-reduced-motion:reduce){
+  .sgp-barra-carga::before{animation:none;width:100%;opacity:.5;}
+  .btn.cargando::after,.sgp-spinner{animation-duration:2.5s;}
+}
+
+/* Acá vivían las dos clases del renglón de cuenta del modal de cobro. Se
+   fueron cuando ese renglón pasó a ser una tabla: cuatro cifras en una línea
+   —lista, descuento, total, seña— no dejaban decir de dónde salía ninguna, y
+   quien cobra no puede defender un número que no puede explicar.
+
+   Lo detectó la prueba que exige que toda clase del CSS aparezca en algún
+   marcado, que es justamente para esto. */
+
+/* ---------------------------------------------------------------------------
+   El portal en el celular.
+
+   La clienta entra casi siempre desde el teléfono, y hasta acá heredaba el
+   ancho del panel: la barra de secciones se cortaba, las tablas de «Mis citas»
+   empujaban la página a lo ancho —con el scroll horizontal que eso trae— y los
+   botones de acción de cada fila quedaban apretados uno contra otro.
+
+   Nada de esto es un componente nuevo: son las mismas clases, acomodadas.
+--------------------------------------------------------------------------- */
+@media (max-width:576px){
+  /* La barra ya scrollea sola; lo que faltaba era que no se pegue al borde
+     y que cada ítem se pueda tocar con el dedo. */
+  .sgp-nav-in{padding-inline:.6rem;gap:.15rem;}
+  .sgp-nav-item{padding:.55rem .6rem;font-size:.82rem;}
+
+  /* Una tabla de acciones en 360 px no entra: las celdas de botones pasan a
+     ocupar la fila entera y los botones se reparten el ancho. */
+  .table td[style*="white-space:nowrap"]{white-space:normal !important;}
+  .table .btn-sm{margin:.12rem 0;}
+  .table td .btn-sm,
+  .table td form.d-inline{display:inline-block;}
+
+  /* El encabezado de página deja de competir con el contenido. */
+  .sgp-page-head h1{font-size:1.15rem;}
+  .sgp-page-head .sub{font-size:.8rem;}
+  .sgp-head-flex{flex-direction:column;align-items:stretch;gap:.5rem;}
+  .sgp-head-acciones .btn{width:100%;}
+
+  /* Los modales del portal —seña, pedido— llegaban pegados a los bordes. */
+  .modal-dialog{margin:.5rem;}
+
+  /* El pie en una sola columna: en dos, los enlaces quedan de una palabra. */
+  .sgp-footer-grid{grid-template-columns:1fr !important;}
+}
+
+/* Rótulo que separa grupos dentro de una lista de casillas: lo agendado y lo
+   que se agrega en el sillón. Neutro a propósito — es una división, no una
+   acción, así que no lleva oro. */
+.sgp-grupo-rotulo{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--texto-tenue);font-weight:600;padding:.2rem 0 .1rem;
+  border-bottom:1px solid var(--borde);margin-bottom:.3rem;}
+
+/* --------------------------------------------------------------------
+   Elegir sucursal: grilla, no columna.
+
+   Con dos locales una columna se ve bien; con quince es scroll puro y hay
+   que leer una por una. Dos por fila desde 480 px, y la lista con su
+   propio scroll para que el botón de cerrar sesión no se vaya de pantalla.
+   -------------------------------------------------------------------- */
+.sgp-suc-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: .5rem;
+    max-height: 52vh;
+    overflow-y: auto;
+    /* El scroll recorta el anillo de foco contra el borde: un respiro. */
+    padding: 2px;
+}
+
+@media (min-width: 480px) {
+    .sgp-suc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* --------------------------------------------------------------------
+   Reportes: que la información respire.
+
+   Las tablas del informe salían con el tamaño de una lista de operación
+   —donde importa ver muchas filas— y acá se leen de a poco: son números
+   que se comparan entre sí. Un poco más de aire y de cuerpo cambia
+   bastante cuánto cuesta leerlas.
+   -------------------------------------------------------------------- */
+.sgp-reporte .table {
+    font-size: .95rem;
+    line-height: 1.45;
+}
+
+.sgp-reporte .table th,
+.sgp-reporte .table td {
+    padding: .7rem .85rem;
+    vertical-align: middle;
+}
+
+.sgp-reporte .table thead th {
+    font-size: .78rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--texto-tenue);
+    border-bottom: 2px solid var(--borde);
+}
+
+/* Cada bloque en su propio panel, separado del anterior: son informes
+   distintos, no una lista continua. */
+.sgp-reporte h2 {
+    font-size: 1.08rem;
+    margin: 2.2rem 0 .8rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--borde);
+}
+
+.sgp-reporte h2:first-of-type { margin-top: 1rem; }
+
+/* Las filas alternadas ayudan a seguir el renglón en una tabla ancha. */
+.sgp-reporte .table tbody tr:nth-child(even) { background: var(--fondo); }
+
+/* `.sgp-ficha` se fue con el detalle de la cita: ese bloque pasó a la fila
+   plegada de la tabla, que usa `.sgp-det-grid` — la misma ficha de dos
+   columnas, pero la que comparten todas las listas. */
+
+/* Un botón del tamaño de un ícono, para no romper el renglón de una tabla. */
+
+/* ---- Reportes: pestañas, gráficos y atajos ----
+   El módulo se repartió en siete pantallas porque en una sola medía 2.600 px
+   y para mirar una cosa había que pasar por las otras seis. Nada de esto trae
+   colores nuevos: son los mismos neutros cálidos y el mismo oro de siempre. */
+
+/* Las pestañas son enlaces de verdad, así que cada informe tiene su URL. */
+.sgp-tabs{display:flex;gap:.15rem;flex-wrap:wrap;margin-bottom:1rem;
+    border-bottom:1px solid var(--borde);}
+.sgp-tab{display:inline-flex;align-items:center;gap:.4rem;
+    padding:.5rem .85rem;font-size:.87rem;text-decoration:none;
+    color:var(--texto-tenue);border-bottom:2px solid transparent;
+    border-radius:var(--radius) var(--radius) 0 0;white-space:nowrap;}
+.sgp-tab:hover{color:var(--acento-texto);background:var(--fondo);}
+.sgp-tab.activo{color:var(--acento-enfasis);border-bottom-color:var(--acento);font-weight:500;
+    background:var(--superficie);}
+.sgp-tab i{font-size:.95rem;opacity:.8;}
+.sgp-tab.activo i{opacity:1;}
+
+/* Las de adentro de un informe —Por día / Por hora— son pastillas, para que
+   no compitan con las de arriba: son dos jerarquías distintas. */
+.sgp-subtabs .nav-link{font-size:.82rem;padding:.28rem .7rem;color:var(--texto-tenue);}
+.sgp-subtabs .nav-link.active{background:var(--acento-suave);color:var(--acento-texto);}
+
+/* El gráfico de barras. Dos divs y un `width` en por ciento: no hace falta
+   librería, y una de CDN habría que mantenerla al día. */
+.sgp-graf-fila{display:flex;align-items:center;gap:.5rem;margin-bottom:.28rem;}
+.sgp-graf-rot{font-size:.8rem;color:var(--texto-tenue);flex:0 0 auto;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sgp-graf-pista{flex:1 1 auto;display:block;background:var(--borde);
+    border-radius:4px;height:14px;overflow:hidden;min-width:40px;}
+.sgp-graf-barra{display:block;background:var(--acento);height:100%;border-radius:4px;}
+.sgp-graf-val{flex:0 0 auto;width:34px;text-align:right;font-size:.8rem;
+    font-variant-numeric:tabular-nums;}
+.sgp-graf-val-ancho{width:auto;min-width:92px;}
+.sgp-graf-mas{display:inline-block;margin-top:.5rem;font-size:.82rem;}
+.sgp-sin-datos{color:var(--texto-tenue);font-size:.85rem;margin:0;}
+
+/* Los atajos de período y los botones de bajada, en un solo renglón. */
+.sgp-atajos-per{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center;
+    margin-top:.7rem;padding-top:.7rem;border-top:1px solid var(--borde);}
+.sgp-atajos-sep{flex:1 1 auto;}
+.sgp-filtros-rep .sgp-filtros{margin-bottom:0;}
+
+/* El pie de una tarjeta: el porcentaje debajo del número. Va chico a
+   propósito —es contexto del número, no otro número—. */
+.sgp-metric-pie{font-size:.72rem;color:var(--texto-tenue);margin-top:.15rem;}
+
+/* El total de una tabla del informe se separa del cuerpo. */
+.sgp-reporte tfoot th{border-top:2px solid var(--borde);
+    background:var(--fondo);font-size:.85rem;}
+
+@media (max-width: 575px) {
+    /* En el celular las pestañas scrollean en horizontal en vez de apilarse
+       en cinco filas, que dejaría el informe abajo del pliegue. */
+    .sgp-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;}
+    .sgp-tabs::-webkit-scrollbar{display:none;}
+    .sgp-tab{padding:.45rem .6rem;font-size:.8rem;}
+    .sgp-graf-rot{max-width:38vw;}
+}
+
+/* **El resumen del informe va compacto**, y esto pisaba la variante.
+   Estas dos reglas repetían el tamaño base —1.55rem y el mismo padding— pero
+   con un selector más específico, así que `.sgp-metrics-compacto` no llegaba a
+   aplicarse nunca: son siete números seguidos y cada tarjeta medía 148 px de
+   alto. Acá sólo queda lo que la variante NO decide. */
+.sgp-reporte .sgp-metric .val { font-variant-numeric: tabular-nums; }
+
+/* Los números en columna se comparan de un vistazo si comparten ancho. */
+.sgp-reporte .table td.text-end,
+.sgp-reporte .table th.text-end {
+    font-variant-numeric: tabular-nums;
+}
+
+/* El rótulo de grupo intercalado en el desplegable salió con los submenús
+   laterales: los grupos ya no son separadores de texto sino renglones que
+   abren al costado, así que la clase quedó sin marcado. La borra
+   `AndamiajeTest`, que es justamente para esto. */
+
+/* --------------------------------------------------------------------
+   Pantalla angosta: la barra de módulos pasa a ser lateral.
+
+   Con la cabecera y la barra apiladas arriba, un panel de 5" se queda sin
+   alto útil y las tarjetas caen fuera de la pantalla. Lateral ocupa el
+   ancho que sobra —los módulos son nueve nombres cortos— y devuelve dos
+   filas de contenido.
+
+   Se activa por debajo de 992 px, que es donde la barra horizontal empieza
+   a necesitar scroll para mostrar los nueve.
+   -------------------------------------------------------------------- */
+/* El interruptor no se ve nunca: lo único que hace es guardar el estado. */
+.sgp-cajon-int { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.sgp-cajon-btn { display: none; }
+.sgp-cajon-fondo {
+    position: fixed; inset: 44px 0 0 0; background: rgba(0,0,0,.45);
+    opacity: 0; visibility: hidden; transition: opacity .18s ease;
+    z-index: 1030; cursor: pointer;
+}
+
+@media (max-width: 991px) {
+    /* El cajón se desliza POR ENCIMA del contenido y no le roba ancho.
+       Antes era un riel fijo de 54 px y el contenido se corría con
+       `margin-left`, que **seguía aplicándose en el Panel —donde la barra ni
+       se dibuja—**: de ahí el hueco al costado en el celular. */
+    .sgp-nav-mod {
+        position: fixed;
+        top: 44px;
+        bottom: 0;
+        left: 0;
+        width: min(78vw, 250px);
+        border-right: 1px solid var(--sup-oscura-borde);
+        border-bottom: none;
+        overflow-y: auto;
+        z-index: 1031;
+        transform: translateX(-100%);
+        transition: transform .18s ease;
+    }
+
+    .sgp-nav-mod .sgp-nav-in {
+        flex-direction: column;
+        align-items: stretch;
+        gap: .1rem;
+        padding: .5rem .4rem;
+        overflow-x: visible;
+    }
+
+    /* Rótulo al lado del ícono y de tamaño normal: apilados y a .58rem no se
+       leían, que es lo que se reportó. Acá sobra el ancho. */
+    .sgp-nav-mod .sgp-nav-item {
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: .6rem;
+        padding: .6rem .7rem;
+        font-size: .9rem;
+        text-align: left;
+        border-bottom: none;
+        border-left: 3px solid transparent;
+        border-radius: var(--radius);
+        line-height: 1.2;
+    }
+
+    .sgp-nav-mod .sgp-nav-item i { font-size: 1rem; width: 1.2rem; text-align: center; }
+    .sgp-nav-mod .sgp-nav-item.activo {
+        border-bottom-color: transparent;
+        border-left-color: var(--acento-sobre-oscura);
+        background: rgba(122, 195, 183, .14);
+    }
+
+    /* **El contenido NO se corre.** El cajón tapa, no empuja. */
+    main.container, .sgp-migas, footer, .sgp-footer { margin-left: 0; }
+
+    /* **El desplegable pasa a ser un acordeón.** El de escritorio no cabe
+       acá y el hover no existe en táctil, así que antes se escondía del todo
+       y tocar el módulo navegaba: las ocho pantallas de Tesorería quedaban a
+       dos pantallas de distancia. Ahora la fila abre el grupo ahí mismo. */
+    .sgp-nav-grupo { position: relative; }
+    .sgp-nav-menu { display: none; }
+    .sgp-nav-int:checked ~ .sgp-nav-menu {
+        display: block; position: static; opacity: 1; visibility: visible;
+        transform: none; min-width: 0; box-shadow: none; border: 0;
+        border-radius: 0; padding: .1rem 0 .3rem .9rem; background: transparent;
+    }
+    .sgp-nav-menu a {
+        display: flex; align-items: center; gap: .5rem;
+        padding: .45rem .5rem; font-size: .85rem; border-radius: var(--radius);
+        color: var(--sobre-oscura-tenue); text-decoration: none;
+    }
+    .sgp-nav-menu a i { font-size: .9rem; width: 1rem; text-align: center; opacity: .7; }
+    .sgp-nav-menu a.activo { color: var(--sobre-oscura-vivo); font-weight: 600; }
+    .sgp-nav-todo { display: flex !important; }
+
+    /* La etiqueta tapa la fila entera: en el celular tocar el módulo
+       DESPLIEGA, que es lo que se pidió. El enlace al módulo sigue estando —
+       es el primer renglón de adentro, «Ver …». */
+    .sgp-nav-tog {
+        display: block; position: absolute; inset: 0 0 auto 0; height: 2.4rem;
+        cursor: pointer; z-index: 1;
+    }
+    .sgp-nav-int:checked ~ .sgp-nav-item .sgp-nav-flecha { transform: rotate(180deg); }
+    .sgp-nav-flecha { transition: transform .15s ease; opacity: .6; }
+
+    /* Los grupos de segundo nivel (Tesorería) se aplanan: en el cajón no hay
+       lugar para un submenú al costado, y el rótulo alcanza para agrupar. */
+    .sgp-nav-sub-wrap { display: block; }
+    .sgp-nav-sub-tit .sgp-nav-sub-flecha { display: none; }
+    .sgp-nav-sub { display: block; padding-left: .8rem; }
+
+    /* El botón del cajón sólo existe acá. */
+    .sgp-cajon-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 34px; height: 34px; margin-right: .1rem; flex: 0 0 auto;
+        border-radius: var(--radius); cursor: pointer;
+        color: var(--sobre-oscura); font-size: 1.25rem; line-height: 1;
+    }
+    .sgp-cajon-btn:hover, .sgp-cajon-int:focus-visible + .sgp-topbar .sgp-cajon-btn {
+        background: var(--sup-oscura-2); color: var(--sobre-oscura-vivo);
+    }
+
+    .sgp-cajon-int:checked ~ .sgp-nav-mod { transform: none; }
+
+    /* El fondo que cierra el cajón al tocar afuera. Es el propio `<label>`
+       repetido por CSS, así que no hace falta JavaScript. */
+    .sgp-cajon-int:checked ~ .sgp-cajon-fondo {
+        opacity: 1; visibility: visible;
+    }
+}
+
+@media (min-width: 992px) {
+    /* En escritorio la barra es horizontal y el cajón no existe. */
+    .sgp-cajon-fondo { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sgp-nav-mod, .sgp-cajon-fondo { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Desplegable nativo (`<details>`), para agrupar dos acciones parientes
+   ---------------------------------------------------------------------------
+   Lo usa la pantalla de «Mis citas» para los dos calendarios. Es `<details>` y
+   no un dropdown de Bootstrap **a propósito**: lo abre el navegador, así que
+   funciona con `app.js` caído — agendar la cita en el teléfono no puede
+   depender de que cargue una librería.
+
+   El `summary` se dibuja como botón, y el marcador triangular se saca: con el
+   ícono al lado se lee como una flecha de más.                              */
+.sgp-desple { position: relative; }
+
+.sgp-desple > summary { list-style: none; cursor: pointer; }
+.sgp-desple > summary::-webkit-details-marker { display: none; }
+.sgp-desple > summary::marker { content: ''; }
+
+.sgp-desple-menu {
+    position: absolute;
+    z-index: 20;
+    min-width: 220px;
+    margin-top: .25rem;
+    padding: .3rem;
+    background: var(--superficie);
+    border: 1px solid var(--borde);
+    border-radius: .5rem;
+    box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .12);
+}
+
+.sgp-desple-menu a {
+    display: block;
+    padding: .45rem .6rem;
+    border-radius: .35rem;
+    color: var(--texto);
+    text-decoration: none;
+    font-size: .88rem;
+    white-space: nowrap;
+}
+
+.sgp-desple-menu a:hover,
+.sgp-desple-menu a:focus { background: var(--acento-tinte); color: var(--texto); }
+
+/* Pegado al borde derecho no se sale de la pantalla en el celular. */
+@media (max-width: 575.98px) {
+    .sgp-desple-menu { right: 0; }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Reservar: el resumen de la cita
+
+   Antes cada tarjeta mostraba su precio y no había ningún total: con tres
+   servicios marcados, sumar era trabajo de la clienta. El bloque va justo
+   arriba del botón, que es donde se decide.
+
+   El oro va SÓLO en el total —es la cifra con jerarquía— y la seña queda en
+   el tinte de aviso, que es lo que la identidad reserva para «esto hay que
+   saberlo antes».
+   --------------------------------------------------------------------- */
+/* **Del resumen de la reserva queda sólo la seña.** Los servicios, la
+   duración y el total los dice el repaso del último paso del asistente, con
+   el día, la hora y quién atiende cada uno — que es más de lo que este bloque
+   mostraba. Se fueron entonces `.sgp-resumen`, `.sgp-resumen-tit`,
+   `.sgp-resumen-dur`, `.sgp-resumen-lista` y `.sgp-resumen-total`: la misma
+   cuenta dos veces en la misma pantalla.
+
+   La seña se queda porque contesta otra pregunta —no cuánto sale, sino cuánto
+   hay que adelantar para que la reserva valga— y va en el tinte de aviso, que
+   es lo que la identidad reserva para «esto hay que saberlo antes». */
+.sgp-resumen-sena{
+  padding:.5rem .6rem;border-radius:var(--radius);
+  background:var(--acento-tinte);color:var(--acento-texto);font-size:.8rem;line-height:1.35;
+}
+/* De dónde sale la seña, servicio por servicio. Sólo se dibuja con más de uno:
+   con uno solo repetiría el número del renglón de arriba. */
+.sgp-sena-detalle{list-style:none;margin:.4rem 0 .3rem;padding:0;}
+.sgp-sena-detalle li{
+  display:flex;justify-content:space-between;gap:.8rem;
+  padding:.12rem 0;border-top:1px solid rgba(15,76,67,.22);
+}
+.sgp-sena-detalle li:first-child{border-top:0;}
+
+/* El atajo al detalle de la cita: se lee de una y ocupa un renglón chico.
+   Antes era una «i» gris del tamaño del texto, indistinguible del resto de
+   la fila — «el tesoro escondido». */
+
+
+/* El aviso de que algo cambió mientras mirabas. Abajo a la derecha y por
+   encima de todo, pero sin tapar nada: es una novedad, no un error. */
+.sgp-vivo{
+  position:fixed;right:1rem;bottom:1rem;z-index:1080;
+  display:flex;align-items:center;gap:.6rem;
+  padding:.55rem .8rem;border-radius:10px;
+  background:var(--sup-oscura);color:var(--sobre-oscura);
+  border:1px solid var(--sup-oscura-borde);
+  box-shadow:0 6px 20px rgba(0,0,0,.25);
+  font-size:.85rem;max-width:min(92vw,26rem);
+}
+@media (max-width:575.98px){
+  .sgp-vivo{left:1rem;right:1rem;justify-content:space-between;}
+}
+
+
+/* =====================================================================
+   REDISEÑO VISUAL — Formulario de Reserva (portal/reservar)
+
+   Clases decorativas para dar jerarquía visual al formulario. Solo
+   estilos; no cambian ningún name, id, data-*, ruta ni lógica.
+   ===================================================================== */
+
+/* --- Línea decorativa bajo el título de la página -------------------- */
+.sgp-titulo-linea {
+  display: block;
+  width: 48px;
+  height: 3px;
+  background: var(--acento);
+  border-radius: 2px;
+  margin-top: .45rem;
+  opacity: .7;
+}
+
+/* --- Sección lógica del formulario ----------------------------------- */
+.sgp-seccion {
+  position: relative;
+  padding: 1.1rem 0 1.3rem;
+  border-bottom: 1px solid var(--borde);
+}
+.sgp-seccion:last-of-type { border-bottom: none; }
+
+[data-tema="oscuro"] .sgp-seccion {
+  border-bottom-color: var(--borde);
+}
+
+/* --- Encabezado de sección con paso numerado ------------------------- */
+.sgp-seccion-head {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  margin-bottom: .65rem;
+}
+.sgp-seccion-head .form-label {
+  font-size: .92rem;
+  font-weight: 600;
+  color: var(--texto);
+  margin-bottom: 0;
+}
+
+/* **El círculo dorado con el número de paso se fue con el asistente.**
+   Lo dibujaba `<span class="sgp-paso">1</span>` en reservar; ahora los pasos
+   los numera la barra del asistente (`.sgp-wiz-bola`), así que ese marcado ya
+   no existe.
+
+   Y sacarlo arregla otra cosa: **el nombre estaba usado dos veces**. Datos de
+   pago tiene su propio `.sgp-paso`, que es un RENGLÓN con el número al lado
+   del título, y esta regla —declarada más abajo— le ganaba por cascada y lo
+   aplastaba a un círculo de 1,55 rem con el título encima. Un mismo nombre
+   para dos cosas distintas no da error: rompe la que se declaró primero. */
+
+/* --- Sub-panel para agrupar campos sueltos (detalles) ---------------- */
+.sgp-detalle-grupo {
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: var(--radius);
+  padding: .85rem 1rem;
+}
+
+[data-tema="oscuro"] .sgp-detalle-grupo {
+  background: rgba(255, 255, 255, .02);
+  border-color: var(--borde);
+}
+
+/* `.sgp-resumen-destacado` se fue con el resumen de dos columnas: era el
+   realce de la tarjeta pegada a la derecha, que ya no existe. */
+
+/* --- Botón reservar más prominente ----------------------------------- */
+.sgp-reservar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  width: 100%;
+  padding: .85rem 1.2rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  letter-spacing: .02em;
+  transition: background .15s, transform .1s, box-shadow .15s;
+}
+.sgp-reservar-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(26,107,95, .35);
+}
+.sgp-reservar-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.sgp-reservar-btn:disabled {
+  opacity: .5;
+}
+
+/* --- Micro-mejoras en tarjetas de servicio (solo hover) --------------
+
+   **El `transform` va detrás de `hover:hover`.** En una pantalla táctil el
+   navegador emula el hover con el primer toque y no lo suelta hasta que se
+   toca otra cosa: la tarjeta recién tocada quedaba levantada 2 px, que junto
+   al borde de oro se lee como que la selección hace crecer el cuadro. Es la
+   misma razón por la que el desplegable de la barra se acota a `hover:hover`. */
+.sgp-srv-card {
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+@media (hover:hover){
+  .sgp-srv-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .10);
+  }
+}
+.sgp-srv-card.elegida {
+  box-shadow: 0 0 0 2px var(--acento-suave), 0 4px 16px rgba(26,107,95, .12);
+}
+
+[data-tema="oscuro"] .sgp-srv-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .30);
+}
+[data-tema="oscuro"] .sgp-srv-card.elegida {
+  box-shadow: 0 0 0 2px var(--acento-suave), 0 4px 16px rgba(26,107,95, .08);
+}
+
+/* --- Contenedor de disponibilidad con fondo sutil -------------------- */
+.sgp-cuando-caja {
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: var(--radius);
+  padding: .85rem 1rem;
+}
+
+[data-tema="oscuro"] .sgp-cuando-caja {
+  background: rgba(255, 255, 255, .02);
+  border-color: var(--borde);
+}
+
+/* **Las dos columnas de reservar se fueron con el asistente.** Eran
+   `.sgp-reserva-layout` y sus dos hijas: el formulario a la izquierda y el
+   resumen pegado a la derecha. Con un paso por pantalla ya no hay dos cosas
+   que mirar a la vez —el resumen ES el último paso— así que el marcado dejó de
+   existir y las reglas quedaban sin nada a lo que aplicar. */
+
+/* --- Responsive: las secciones se aprietan en móvil ------------------ */
+@media (max-width: 575.98px) {
+  .sgp-seccion { padding: .8rem 0 1rem; }
+  .sgp-seccion-head .form-label { font-size: .85rem; }
+  .sgp-detalle-grupo { padding: .7rem .75rem; }
+  .sgp-cuando-caja { padding: .7rem .75rem; }
+  .sgp-reservar-btn { font-size: .92rem; padding: .6rem 1rem; }
+  .sgp-titulo-linea { width: 36px; height: 2.5px; }
+}
+
+/* --- El asistente de reserva: un paso por pantalla ------------------
+   Los colores salen todos de las variables de la identidad: el oro
+   marca el paso EN CURSO —que es jerarquía, no adorno— y lo recorrido
+   queda en el verde semántico, que es lo que ya significa «salió bien».
+   Nada de esto inventa un color.
+
+   **Sin `app.js` no aplica nada**: el `display:none` cuelga de
+   `.sgp-wiz-on`, que la pone el script. Con el JS caído se ven los
+   pasos uno abajo del otro y se reserva igual, como antes. */
+/* **El combo de profesional no se pregunta dos veces.**
+
+   Vive dentro de la tarjeta desde la 7.51.0 y ahí sigue: es el nodo que el
+   paso «Profesionales» **mueve** —no copia— y es el que queda usable si
+   `app.js` no cargó. Lo que no puede pasar es que se vea en los dos lugares:
+   marcabas un servicio, te aparecía «¿con quién?» ahí mismo, y una pantalla
+   después el asistente te lo volvía a preguntar. Se reportó tal cual.
+
+   Se esconde **sólo mientras el asistente esté andando** y **sólo mientras el
+   combo siga dentro de la tarjeta**: al moverlo, el nodo deja de tener
+   `.sgp-srv-card` de ancestro y esta regla no lo alcanza. Sin JavaScript no
+   existe `.sgp-wiz-on`, así que se ven todos y se elige profesional igual. */
+.sgp-wiz-on .sgp-srv-card .sgp-srv-extra{display:none;}
+
+.sgp-wiz-on > [data-paso]{display:none;}
+.sgp-wiz-on > [data-paso].sgp-wiz-activo{display:block;animation:sgpWizEntra .18s ease-out;}
+@keyframes sgpWizEntra{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion:reduce){
+  .sgp-wiz-on > [data-paso].sgp-wiz-activo{animation:none;}
+}
+
+.sgp-wiz-barra{
+  display:flex;gap:.25rem;list-style:none;margin:0 0 1rem;padding:0;
+  overflow-x:auto;scrollbar-width:none;
+}
+.sgp-wiz-barra::-webkit-scrollbar{display:none;}
+.sgp-wiz-item{
+  display:flex;flex-direction:column;align-items:center;gap:.25rem;
+  flex:1 1 0;min-width:64px;position:relative;padding-top:.15rem;
+  font-size:.7rem;color:var(--texto-tenue);text-align:center;
+}
+/* La línea que une los pasos: se dibuja hacia atrás, así el primero no
+   arrastra una línea que sale de la nada. */
+.sgp-wiz-item + .sgp-wiz-item::before{
+  content:"";position:absolute;top:calc(.15rem + 13px);right:50%;left:-50%;
+  height:2px;background:var(--borde);z-index:0;
+}
+.sgp-wiz-item.hecho + .sgp-wiz-item::before,
+.sgp-wiz-item.activo::before{background:var(--acento);}
+.sgp-wiz-bola{
+  position:relative;z-index:1;
+  width:26px;height:26px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--superficie);border:2px solid var(--borde);
+  font-size:.78rem;font-weight:500;color:var(--texto-tenue);
+}
+.sgp-wiz-item.activo .sgp-wiz-bola{
+  background:var(--acento);border-color:var(--acento);color:var(--sobre-acento);
+}
+.sgp-wiz-item.activo .sgp-wiz-tit{color:var(--acento-texto);font-weight:500;}
+.sgp-wiz-item.hecho .sgp-wiz-bola{
+  background:var(--verde-tinte);border-color:var(--verde);color:var(--verde);
+}
+.sgp-wiz-item.hecho{cursor:pointer;}
+.sgp-wiz-tit{line-height:1.1;}
+
+.sgp-wiz-nav{
+  display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;
+  margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--borde);
+}
+/* En el celular los dos botones ocupan el ancho: son el único destino
+   del pulgar en esa pantalla. */
+@media (max-width:575.98px){
+  .sgp-wiz-nav .btn{flex:1 1 auto;justify-content:center;}
+  .sgp-wiz-tit{display:none;}
+  .sgp-wiz-item{min-width:0;}
+}
+
+/* --- El repaso del último paso: «tu cita quedaría así» --- */
+.sgp-wiz-repaso{
+  border:1px solid var(--borde);border-radius:.6rem;overflow:hidden;
+  background:var(--superficie);
+}
+.sgp-wiz-repaso-dia{
+  display:flex;align-items:center;gap:.5rem;
+  padding:.6rem .8rem;border-bottom:1px solid var(--borde);
+  font-weight:500;
+}
+.sgp-wiz-linea{
+  display:flex;gap:.7rem;align-items:flex-start;
+  padding:.7rem .8rem;border-bottom:1px solid var(--borde);
+}
+.sgp-wiz-linea:last-child{border-bottom:0;}
+.sgp-wiz-linea-ic{
+  width:34px;height:34px;border-radius:.5rem;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--acento-tinte);color:var(--acento-texto);
+}
+.sgp-wiz-linea-cuerpo{flex:1 1 auto;min-width:0;}
+.sgp-wiz-linea-nom{font-weight:500;}
+.sgp-wiz-linea-quien{font-size:.8rem;color:var(--texto-tenue);}
+.sgp-wiz-linea-val{white-space:nowrap;font-weight:500;}
+.sgp-wiz-cifras{
+  display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-top:.8rem;
+}
+.sgp-wiz-cifra{
+  border:1px solid var(--borde);border-radius:.6rem;padding:.6rem .7rem;
+  background:var(--superficie);
+}
+.sgp-wiz-cifra .r{font-size:.74rem;color:var(--texto-tenue);display:block;}
+.sgp-wiz-cifra .v{font-weight:500;}
+
+/* =====================================================================
+   TABLAS CONVERTIDAS EN TARJETAS PARA MÓVIL
+   Patrón genérico: se agrega `sgp-tabla-movil` al wrapper y `data-label`
+   a cada `<td>` de la vista. En ≤575.98 px las filas se vuelven tarjetas
+   verticales con pares etiqueta-valor.
+
+   El CSS del portal (`.sgp-portal-citas-grid`) fue el prototipo de esto;
+   ahora se generaliza para las ~40 pantallas de gestión interna.
+
+   En escritorio NO cambia nada: todo vive dentro de la media query.
+   ===================================================================== */
+@media (max-width:575.98px){
+  /* ── Tarjetas: cada <tr> pasa a bloque compacto ── */
+  .sgp-tabla-movil .table thead{display:none;}
+  .sgp-tabla-movil .table tbody tr{
+    display:block;
+    border:1px solid var(--borde);
+    border-radius:.45rem;
+    padding:.55rem .65rem;
+    margin-bottom:.55rem;
+    background:var(--superficie);
+  }
+  .sgp-tabla-movil .table tbody tr:last-child{margin-bottom:0;}
+
+  /* ── Cada celda es un par clave-valor compacto ──
+
+     **El valor va a la IZQUIERDA, pegado a su rótulo, y no a la derecha.**
+     Con `space-between` y `text-align:right` una lista de cuatro servicios
+     quedaba alineada a la derecha, con el renglón partido y el rótulo
+     flotando a la otra punta: se leía como una tabla contable y no como
+     una ficha. Se reportó como «información ambigua y saturada». */
+  .sgp-tabla-movil .table tbody td{
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:flex-start;
+    align-items:baseline;
+    gap:.1rem .5rem;
+    border:0;
+    padding:.18rem 0;
+    text-align:left;
+    font-size:.84rem;
+    white-space:normal !important;
+    line-height:1.35;
+  }
+
+  /* ── Etiqueta desde data-label: discreta, no grita ── */
+  .sgp-tabla-movil .table tbody td[data-label]:before{
+    content:attr(data-label);
+    font-weight:500;
+    font-size:.66rem;
+    color:var(--texto-tenue);
+    text-transform:uppercase;
+    letter-spacing:.03em;
+    text-align:left;
+    flex-shrink:0;
+    min-width:5.4rem;
+    opacity:.7;
+  }
+  .sgp-tabla-movil .table tbody td:not([data-label]):before{display:none;}
+
+  /* ── El sujeto de la fila: sin rótulo y en negrita ──
+     En la agenda es la clienta; en Cobros, quién pagó. Un rótulo «CLIENTE»
+     sobre el único nombre grande de la tarjeta no aclara nada, y quitarlo
+     es lo que deja leer la tarjeta de un vistazo: hora, quién, y abajo
+     el resto con su rótulo. */
+  /* **El color va en `--texto`, no en `--sobre-acento`.** `--sobre-acento` es una
+     SUPERFICIE y se da vuelta con el tema: en oscuro vale #080807, así que el
+     nombre de la clienta salía negro sobre el fondo oscuro de la tarjeta y no
+     se leía — se reportó como «los nombres de clientes permanecen en negro en
+     modo oscuro, se camuflan con el fondo». `--texto` ES el color del texto
+     principal y se invierte al revés, que es justo lo que hace falta. */
+  .sgp-tabla-movil .table tbody td.sgp-movil-sujeto{
+    display:block;
+    font-weight:600;
+    font-size:.92rem;
+    color:var(--texto);
+    padding-bottom:.25rem;
+  }
+  .sgp-tabla-movil .table tbody td.sgp-movil-sujeto:before{display:none;}
+
+  /* ── Los botones de sólo ícono dicen qué hacen ──
+     En escritorio el `title` sale al pasar el mouse; en el celular no hay
+     mouse, así que seis íconos seguidos eran seis adivinanzas. El texto
+     sale del mismo `title`, o sea que no se puede desfasar del tooltip. */
+  .sgp-tabla-movil .table tbody td.sgp-movil-acciones .btn.sgp-btn-ico[title]::after{
+    content:attr(title);
+    margin-left:.3rem;
+    font-size:.78rem;
+  }
+
+  /* ── Título de la tarjeta: el dato principal ── */
+  .sgp-tabla-movil .table tbody td.sgp-movil-titulo{
+    font-weight:600;
+    font-size:.88rem;
+    text-align:left;
+    padding-bottom:.3rem;
+    margin-bottom:.1rem;
+    border-bottom:1px solid color-mix(in srgb, var(--borde) 60%, transparent);
+  }
+  .sgp-tabla-movil .table tbody td.sgp-movil-titulo:before{display:none;}
+
+  /* La grilla de dos columnas ocupa el ancho de la tarjeta: en el celular
+     no hay una columna a la derecha de la que colgar. */
+  .sgp-tabla-movil .table tbody td.sgp-movil-acciones .sgp-acciones{
+    width:100%;max-width:none;margin-left:0;
+  }
+
+  /* ── Acciones: fila de botones al pie ── */
+  .sgp-tabla-movil .table tbody td.sgp-movil-acciones{
+    justify-content:flex-start;
+    flex-wrap:wrap;
+    gap:.3rem;
+    padding-top:.35rem;
+    border-top:1px solid color-mix(in srgb, var(--borde) 60%, transparent);
+    margin-top:.15rem;
+  }
+  .sgp-tabla-movil .table tbody td.sgp-movil-acciones:before{display:none;}
+  /* La grilla de dos columnas de la agenda ocupa el ancho de la tarjeta. */
+  .sgp-tabla-movil .table tbody td.sgp-movil-acciones .sgp-acciones{width:100%;min-width:0;}
+
+  /* ── Los badges van uno al lado del otro, sin estirarse ── */
+  .sgp-tabla-movil .table tbody td .badge-estado{margin:0;}
+
+  /* ── La fila de detalle (`.sgp-fila-detalle`) NO es otra tarjeta ──
+     Con la regla general de arriba cada `<tr>` pasa a tarjeta, y la fila
+     desplegable heredaba borde, relleno y margen: plegada quedaba como una
+     caja vacía entre dos citas, y desplegada como una tarjeta suelta sin
+     dueño. Acá se pega a la de arriba —sin borde propio, con el cuerpo
+     dibujado como pie de la tarjeta— y la tarjeta que la abre pierde sus
+     esquinas de abajo sólo mientras está abierta. */
+  .sgp-tabla-movil .table tbody tr.sgp-fila-detalle{
+    border:0;padding:0;margin:0 0 .55rem;background:transparent;border-radius:0;
+  }
+  .sgp-tabla-movil .table tbody tr.sgp-fila-detalle > td{display:block;padding:0 !important;}
+  .sgp-tabla-movil .table tbody tr.sgp-fila-detalle .sgp-det-cuerpo{
+    border:1px solid var(--borde);border-top:0;
+    border-radius:0 0 .45rem .45rem;padding:.6rem .65rem;
+  }
+  .sgp-tabla-movil .table tbody tr:has(+ .sgp-fila-detalle){margin-bottom:0;}
+  .sgp-tabla-movil .table tbody tr:has(.sgp-btn-detalle[aria-expanded="true"]){
+    border-bottom-left-radius:0;border-bottom-right-radius:0;
+  }
+
+  /* ── Botones con touch target mínimo ── */
+  .sgp-tabla-movil .table .btn-sm{min-height:34px;min-width:34px;}
+
+  /* ── Columnas ocultables en móvil ──
+     Usar .sgp-movil-oculto en <th> y <td> de columnas secundarias
+     que aportan ruido en una tarjeta de celular. */
+  .sgp-movil-oculto{display:none !important;}
+  /* Cuando la tarjeta tiene la clase sgp-movil-expandido (inyectada por JS),
+     volvemos a mostrar los datos ocultos. */
+  .sgp-tabla-movil .table tbody tr.sgp-movil-expandido td.sgp-movil-oculto{display:flex !important;}
+  /* Animación sutil para que no sea tan brusco el salto de altura */
+  .sgp-tabla-movil .table tbody tr { transition: all 0.2s ease-in-out; }
+
+  /* ── Filtros apilados, y PLEGADOS hasta que se los pida ──
+     La casilla `.sgp-filtros-int` y su etiqueta son la misma pieza que el
+     cajón de módulos: CSS puro, sin JavaScript. Con un filtro aplicado la
+     casilla viene marcada desde el servidor y la barra arranca abierta. */
+  .sgp-filtros{flex-direction:column;align-items:stretch;gap:.5rem;}
+  .sgp-filtros-plegar{
+    display:flex;align-items:center;gap:.4rem;
+    font-weight:500;font-size:.88rem;color:var(--texto);
+    cursor:pointer;user-select:none;margin:0;
+  }
+  .sgp-filtros-plegar .badge-estado{font-size:.68rem;}
+  .sgp-filtros-flecha{margin-left:auto;transition:transform .2s;}
+  .sgp-filtros-int:checked ~ .sgp-filtros-plegar .sgp-filtros-flecha{transform:rotate(180deg);}
+  .sgp-filtros-int:not(:checked) ~ .sgp-filtro,
+  .sgp-filtros-int:not(:checked) ~ .sgp-filtro-btns{display:none;}
+  .sgp-filtro{flex:1 1 100% !important;min-width:0 !important;}
+  .sgp-filtro-btns{flex-wrap:wrap;width:100%;justify-content:stretch;}
+  .sgp-filtro-btns .btn{flex:1 1 auto;}
+
+  /* ── El sgp-panel que envuelve tablas necesita menos padding ── */
+  .sgp-panel:has(.sgp-tabla-movil){padding:.5rem .4rem;}
+}
+
+/* =====================================================================
+   EL PANEL PRINCIPAL
+   =====================================================================
+   Vivía en un `<style>` dentro de la propia vista, empujado al final del
+   `<body>` por `@push('scripts')`: la página se pintaba sin estos estilos
+   y se reacomodaba después, y el `[data-tema="oscuro"]` quedaba dentro
+   del HTML del panel. Acá llega junto con el resto de la hoja.
+
+   **La forma es la de la maqueta del usuario (7.118.0)**: el saludo como
+   título chico, a la izquierda las citas y el resumen financiero, a la
+   derecha los módulos en tres columnas. Las superficies salen de las
+   variables de siempre —`--superficie` para la caja, `--fondo` para lo
+   de adentro— así que **el tema oscuro las da vuelta solo**: no queda un
+   solo `[data-tema="oscuro"]` acá, que es la regla del proyecto.
+   ===================================================================== */
+
+/* El saludo: un título, no un cartel. Arriba a la izquierda y chico. */
+.sgp-saludo{font-size:1.15rem;font-weight:500;margin:.9rem 0 .8rem;color:var(--texto);}
+
+/* Las cajas grandes del wireframe: fondo de tarjeta, borde cálido. */
+.panel-box{
+  background:var(--superficie);border:1px solid var(--borde);
+  border-radius:var(--radius);padding:1rem 1.1rem;
+}
+.panel-box-titulo{
+  font-size:.95rem;font-weight:500;margin:0 0 .7rem;color:var(--texto);
+  display:flex;align-items:center;gap:.45rem;
+}
+.panel-box-titulo .bi{color:var(--acento-enfasis);}
+/* El atajo del título —«ir a la agenda →»— va a la derecha, chico y sin
+   el peso del título. */
+.panel-box-atajo{margin-left:auto;font-size:.78rem;font-weight:400;white-space:nowrap;}
+
+/* Lo de adentro va un paso más al fondo, para que se lea como contenido
+   y no como otra caja. */
+.panel-box-inner{
+  background:var(--fondo);border-radius:calc(var(--radius) - 4px);
+  padding:.6rem .8rem;max-height:300px;overflow:auto;
+}
+
+/* Las listas de citas del panel: un renglón por cita, quién a la
+   izquierda y la hora a la derecha. */
+.sgp-lista-cab{
+  display:flex;justify-content:space-between;align-items:center;gap:.5rem;
+  font-size:.82rem;padding-bottom:.25rem;margin-bottom:.2rem;
+  border-bottom:1px solid var(--borde);
+}
+.sgp-lista-citas{font-size:.84rem;}
+.sgp-lista-citas li{
+  display:flex;justify-content:space-between;align-items:center;gap:.5rem;
+  padding:.3rem 0;border-bottom:1px dashed var(--borde);
+}
+.sgp-lista-citas li:last-child{border-bottom:0;}
+.sgp-lista-citas li > span:first-child{min-width:0;}
+
+/* Las tarjetas del resumen financiero */
+.metric-card{
+  background:var(--fondo);border-radius:calc(var(--radius) - 4px);
+  padding:.75rem .9rem;
+}
+.metric-lbl{font-size:.76rem;color:var(--texto-tenue);text-transform:uppercase;letter-spacing:.03em;}
+.metric-value{font-size:1.5rem;font-weight:600;color:var(--acento-enfasis);line-height:1.15;margin-top:.15rem;}
+.metric-comparado{font-size:.8rem;margin-top:.2rem;}
+/* La tarjeta de un solo número —Ingresos de hoy— se centra a lo alto y a lo
+   ancho, que es como se lee un KPI solo al lado de otra tarjeta (7.121.1). */
+.sgp-metric-centrada{display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;}
+.sgp-metric-centrada .metric-value{font-size:1.9rem;}
+/* El estado financiero: dos renglones fijos —cajas abiertas y cuentas
+   bancarias— con su número y su acceso (7.122.0). Era una lista de cada caja
+   y cada cuenta con su saldo, y crecía sin tope con el salón: ahora mide lo
+   mismo con 1 cajón que con 20. */
+.sgp-estado-fin li{display:flex;align-items:center;gap:.6rem;padding:.35rem 0;}
+.sgp-estado-fin li + li{border-top:1px dashed var(--borde);}
+.sgp-estado-fin li > .bi{font-size:1.25rem;flex:0 0 auto;}
+.sgp-estado-fin-que{flex:1 1 auto;min-width:0;font-size:.9rem;line-height:1.2;}
+.sgp-estado-fin-n{font-size:1.25rem;font-variant-numeric:tabular-nums;margin-right:.15rem;}
+.sgp-estado-fin-ir{flex:0 0 auto;white-space:nowrap;font-size:.84rem;}
+
+/* La grilla de los módulos: tres columnas siempre. **En la computadora
+   llena la caja entera** —las filas se reparten a lo alto y las pastillas
+   crecen con ellas, con el ícono y el rótulo más grandes—: con la `row`
+   de Bootstrap las nueve quedaban apiladas arriba, del tamaño de su
+   texto, y debajo sobraba media caja. En el celular no hay alto que
+   repartir, así que vuelve a ser la grilla compacta. */
+.sgp-modulos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;flex:1 1 auto;}
+/* El portal tiene seis pantallas y no nueve: en dos columnas quedan tres
+   filas, que es la misma proporción que los módulos del personal. */
+.sgp-modulos-2{grid-template-columns:repeat(2,minmax(0,1fr));}
+@media (min-width:992px){
+  .sgp-modulos{grid-auto-rows:minmax(0,1fr);gap:1rem;}
+  .sgp-modulo-pill{font-size:.78rem;gap:.55rem;border-radius:32px;padding:1rem .25rem;}
+  .sgp-modulo-pill i{font-size:1.8rem;}
+}
+/* Con la columna ancha entra el rótulo entero, un punto más grande. */
+@media (min-width:1200px){
+  .sgp-modulos{gap:1.1rem;}
+  .sgp-modulo-pill{font-size:.88rem;}
+  .sgp-modulo-pill i{font-size:1.9rem;}
+}
+
+/* Las pastillas de módulo del wireframe: oscuras, con el ícono arriba.
+   Son oscuras en los DOS temas —como la barra—, así que salen de las
+   variables que no se invierten. */
+.sgp-modulo-pill{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.35rem;
+  background:var(--sup-oscura);color:var(--sobre-oscura);
+  border:1px solid var(--sup-oscura-borde);border-radius:40px;
+  padding:.85rem .15rem;text-decoration:none;font-weight:500;font-size:.74rem;
+  text-align:center;height:100%;line-height:1.1;
+  transition:background-color .2s ease-in-out,color .2s ease-in-out,transform .2s ease-in-out;
+}
+.sgp-modulo-pill i{font-size:1.25rem;color:var(--acento-sobre-oscura);}
+.sgp-modulo-pill:hover{background:var(--acento-sobre-oscura);color:var(--sup-oscura);border-color:var(--acento-sobre-oscura);transform:translateY(-2px);}
+.sgp-modulo-pill:hover i{color:var(--sup-oscura);}
+.sgp-modulo-pill.disabled{opacity:.45;cursor:not-allowed;pointer-events:none;}
+
+/* =====================================================================
+   Ajustes del sistema — Configuración → Ajustes
+
+   La pantalla donde el salón elige su color, su letra, y el nombre y el
+   logo con los que se presenta. Tiene la forma de la maqueta que dio el
+   usuario: a la izquierda lo que se decide —cuatro desplegables con un
+   título que dice para qué es cada uno—, a la derecha **cómo va a
+   quedar**, y un solo botón de guardar al pie.
+
+   Todo sale de las variables de la identidad, así que la pantalla que
+   configura los colores también cambia con los colores. La ÚNICA
+   excepción es la vista previa, que se pinta con su propio juego
+   `--pv-*`: tiene que poder mostrar una paleta que todavía no se
+   guardó — si leyera las de la página, mostraría la de ahora.
+   ===================================================================== */
+/* **La previa es MEDIANA a propósito** (7.125.0, pedido del usuario). A
+   media pantalla —`1fr / 1.05fr`— se comía la computadora: lo que hay que
+   mirar cabe en 300 px, y lo que se decide se lee mejor con el ancho que
+   sobra. */
+.sgp-ap-layout{display:grid;grid-template-columns:minmax(0,1fr) 19rem;gap:2rem;align-items:start;}
+@media (max-width:991.98px){.sgp-ap-layout{grid-template-columns:1fr;gap:1.5rem;}}
+.sgp-ap-col{min-width:0;}
+/* En el celular la previa va DESPUÉS de lo que se decide, y acotada al
+   mismo ancho que en la computadora: estirada a 375 px la agenda de
+   mentira parecía la de verdad. */
+@media (max-width:991.98px){.sgp-ap-lado{max-width:19rem;}}
+
+.sgp-ap-grupo{margin-bottom:1.1rem;}
+.sgp-ap-grupo > h3{font-size:.85rem;font-weight:600;margin-bottom:.45rem;color:var(--texto-tenue);}
+
+/* El renglón del color: las muestras, el nombre y el botón que abre el
+   elegidor. Es lo primero que se ve, así que dice en qué está sin que
+   haya que abrir nada. */
+.sgp-ap-fila{
+  display:flex;align-items:center;gap:.85rem;flex-wrap:wrap;
+  background:var(--superficie);border:1px solid var(--borde);
+  border-radius:var(--radius);padding:.8rem;
+}
+.sgp-ap-muestras{display:flex;width:3.6rem;height:2.6rem;flex:0 0 auto;border-radius:8px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}
+.sgp-ap-muestras span{flex:1;}
+.sgp-ap-nombre{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere;}
+
+/* Los dos botones de una decisión binaria —letra, vista previa—. Son
+   etiquetas de radio, así que el tamaño de letra se elige y se guarda
+   con el JavaScript apagado. */
+.sgp-ap-opciones{display:flex;gap:.5rem;flex-wrap:wrap;}
+.sgp-ap-opcion{
+  flex:1 1 0;min-width:7rem;display:flex;align-items:center;justify-content:center;gap:.5rem;
+  background:var(--bs-secondary-bg);border:1px solid var(--borde-fuerte);
+  border-radius:10px;padding:.7rem .6rem;cursor:pointer;font-size:.85rem;
+  color:var(--texto);text-align:center;line-height:1.2;
+}
+.sgp-ap-opcion input{position:absolute;opacity:0;width:0;height:0;}
+.sgp-ap-opcion:hover{background:var(--acento-suave);}
+/* La misma pastilla la usan dos cosas: el tamaño de letra, que es una
+   etiqueta de radio y SE GUARDA, y el modo de la previa, que es un botón y
+   no guarda nada. Por eso el estado marcado se escribe de las dos formas. */
+.sgp-ap-opcion:has(input:checked),
+.sgp-ap-opcion[aria-pressed="true"]{
+  background:var(--acento-suave);color:var(--acento-texto);
+  border-color:var(--acento);box-shadow:inset 0 0 0 1px var(--acento);font-weight:600;
+}
+.sgp-ap-opcion:has(input:focus-visible),
+button.sgp-ap-opcion:focus-visible{outline:2px solid var(--acento);outline-offset:2px;}
+button.sgp-ap-opcion{font:inherit;}
+.sgp-ap-aa-chico{font-size:1rem;}
+.sgp-ap-aa-grande{font-size:1.25rem;}
+.sgp-ap-aa-mayor{font-size:1.55rem;}
+
+/* El elegidor de color. Arranca ABIERTO en el marcado y lo pliega el JS:
+   sin `app.js` se ven las dieciocho paletas y se elige igual, que es la
+   regla de siempre. */
+.sgp-ap-picker{border:1px solid var(--borde);border-radius:var(--radius);padding:.9rem;background:var(--superficie);margin-top:.75rem;}
+/* Tres por fila, que con seis por página son dos filas parejas: con
+   `auto-fill` la página quedaba en cuatro y dos. En el celular, dos. */
+.sgp-ap-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.55rem;margin:.75rem 0;}
+@media (max-width:575.98px){.sgp-ap-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+.sgp-ap-paleta{
+  display:block;border:1px solid var(--borde);border-radius:10px;background:var(--bs-body-bg);
+  padding:.45rem;cursor:pointer;min-width:0;
+}
+.sgp-ap-paleta input{position:absolute;opacity:0;width:0;height:0;}
+.sgp-ap-paleta:hover{border-color:var(--acento);}
+.sgp-ap-paleta:has(input:checked){border-color:var(--acento);box-shadow:inset 0 0 0 1px var(--acento);}
+.sgp-ap-paleta:has(input:focus-visible){outline:2px solid var(--acento);outline-offset:2px;}
+.sgp-ap-tiras{display:flex;height:2.1rem;border-radius:6px;overflow:hidden;margin-bottom:.35rem;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}
+.sgp-ap-tiras i{flex:1;}
+.sgp-ap-tiras i:first-child{flex:2;}
+.sgp-ap-paleta-nom{display:flex;justify-content:space-between;align-items:center;gap:.3rem;font-size:.78rem;}
+.sgp-ap-tick{visibility:hidden;color:var(--acento-enfasis);font-weight:700;}
+.sgp-ap-paleta:has(input:checked) .sgp-ap-tick{visibility:visible;}
+
+.sgp-ap-pag{display:flex;justify-content:space-between;align-items:center;gap:.5rem;}
+.sgp-ap-pag span{font-size:.8rem;color:var(--texto-tenue);}
+.sgp-ap-propio{
+  display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;
+  margin-top:.9rem;padding-top:.75rem;border-top:1px solid var(--borde);font-size:.85rem;
+}
+.sgp-ap-vacio{grid-column:1/-1;padding:1.5rem .5rem;text-align:center;font-size:.85rem;color:var(--texto-tenue);}
+
+/* Los campos de la identidad y de los datos fiscales. **No se usa la
+   grilla de Bootstrap**: sus columnas miran el ancho de la VENTANA, y acá
+   viven adentro de una de las dos columnas de la pantalla — con `col-md-4`
+   en 370 px el rótulo se parte en dos y el ícono de ayuda se cae a su
+   propio renglón. Ésta mira el ancho que de verdad tiene. */
+.sgp-ap-campos{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.9rem;}
+/* Sin esto, un `input[type=file]` estira su celda: su ancho mínimo
+   intrínseco es el del botón «Seleccionar archivo» más el nombre. */
+.sgp-ap-campos > div{min-width:0;}
+.sgp-ap-campos input{max-width:100%;}
+.sgp-ap-campos .sgp-ap-ancho{grid-column:1/-1;}
+
+/* ------------------------------------------------------------------
+   «Así se verá»: la agenda de mentira.
+
+   Se pinta con `--pv-*` y NO con las variables del sistema, porque
+   tiene que mostrar la paleta que se está eligiendo —que todavía no se
+   guardó—. Los valores los escribe el servidor al dibujar la pantalla, y
+   el JS los reemplaza a medida que se toca algo.
+   ------------------------------------------------------------------ */
+/* Pegada mientras se baja por los desplegables, y DEBAJO de las dos barras
+   fijas de arriba —el encabezado y la de módulos—: con `top:1rem` se metía
+   debajo de ellas en cuanto se scrolleaba. */
+.sgp-ap-previa-caja{position:sticky;top:6.75rem;}
+@media (max-width:991.98px){.sgp-ap-previa-caja{position:static;}}
+/* El rótulo y, a su derecha, los dos botones que cambian la previa a
+   pantalla clara u oscura. Van juntos porque son de la previa y de nada
+   más: no guardan el tema, que lo elige cada persona en Mi cuenta. */
+.sgp-ap-previa-cab{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.4rem;}
+.sgp-ap-previa-rotulo{font-size:.8rem;color:var(--texto-tenue);}
+.sgp-ap-modos{display:inline-flex;border:1px solid var(--borde-fuerte);border-radius:8px;overflow:hidden;}
+.sgp-ap-modo{
+  background:var(--bs-secondary-bg);color:var(--texto);border:0;padding:.2rem .55rem;
+  font-size:.85rem;line-height:1;cursor:pointer;
+}
+.sgp-ap-modo + .sgp-ap-modo{border-left:1px solid var(--borde-fuerte);}
+.sgp-ap-modo:hover{background:var(--acento-suave);}
+.sgp-ap-modo[aria-pressed="true"]{background:var(--acento);color:var(--sobre-acento);}
+.sgp-ap-modo:focus-visible{outline:2px solid var(--acento);outline-offset:-2px;}
+.sgp-ap-previa{
+  background:var(--pv-fondo);color:var(--pv-texto);font-size:var(--pv-letra,1rem);
+  font-family:var(--pv-fuente,inherit);
+  border:1px solid var(--pv-borde);border-radius:var(--radius);overflow:hidden;
+}
+.sgp-ap-previa-barra{
+  background:var(--pv-barra);color:var(--pv-sobre-barra);
+  padding:.75rem .9rem;display:flex;align-items:center;gap:.6rem;
+}
+.sgp-ap-previa-logo{
+  width:2rem;height:2rem;border-radius:9px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  background:var(--pv-acento-barra);color:var(--pv-barra);overflow:hidden;
+}
+.sgp-ap-previa-logo img{width:100%;height:100%;object-fit:contain;}
+.sgp-ap-previa-nombre{font-weight:600;min-width:0;overflow-wrap:anywhere;}
+.sgp-ap-previa-cuerpo{padding:1rem;}
+.sgp-ap-previa-fecha{font-size:.8em;color:var(--pv-tenue);}
+.sgp-ap-previa-titulo{font-size:1.35em;font-weight:600;margin:.15rem 0 .8rem;}
+.sgp-ap-cita{
+  display:flex;align-items:flex-start;gap:.9rem;
+  background:var(--pv-superficie);border:1px solid var(--pv-borde);
+  padding:.7rem .8rem;border-radius:10px;margin-bottom:.55rem;
+}
+.sgp-ap-hora{font-size:.9em;font-weight:600;white-space:nowrap;}
+.sgp-ap-persona{font-weight:600;}
+.sgp-ap-servicio{color:var(--pv-tenue);font-size:.85em;}
+.sgp-ap-ok{
+  display:inline-block;margin-top:.3rem;font-size:.72em;padding:.1rem .45rem;border-radius:4px;
+  background:var(--pv-suave);color:var(--pv-acento-texto);
+}
+.sgp-ap-boton{
+  display:block;text-align:center;margin-top:.9rem;padding:.65rem;border-radius:10px;
+  background:var(--pv-acento);color:var(--pv-sobre-acento);font-weight:600;font-size:.95em;
+}
+
+/* El pie: guardar, deshacer y volver a fábrica. Va pegado abajo del
+   bloque entero y no adentro de una columna, porque guarda las dos. */
+.sgp-ap-pie{
+  display:flex;justify-content:flex-end;align-items:center;gap:.5rem;flex-wrap:wrap;
+  border-top:1px solid var(--borde);margin-top:1.25rem;padding-top:1rem;
+}
+
+/* Los cuatro desplegables: Identidad, Apariencia, Texto y Datos fiscales.
+   Todos con la misma pieza —`<details>`, que abre y cierra sin JavaScript—
+   y con un título que ya dice para qué es cada uno. El primero no lleva la
+   línea de arriba, que ahí sería el borde del panel repetido. */
+.sgp-ap-det{border-top:1px solid var(--borde);}
+.sgp-ap-det:first-child{border-top:0;}
+.sgp-ap-det > summary{
+  font-size:.95rem;font-weight:600;padding:.85rem 0;cursor:pointer;list-style:none;
+  display:flex;align-items:center;gap:.5rem;
+}
+.sgp-ap-det > summary > .bi{color:var(--acento-enfasis);font-size:1rem;}
+.sgp-ap-det > summary::-webkit-details-marker{display:none;}
+.sgp-ap-det > summary::before{content:"\f282";font-family:"bootstrap-icons";font-size:.8rem;color:var(--texto-tenue);}
+.sgp-ap-det[open] > summary::before{content:"\f286";}
+.sgp-ap-det-cuerpo{padding:0 0 1.1rem;}

@@ -1,0 +1,79 @@
+{{--
+    Pie de listado estándar: cuántos hay y en qué página estamos.
+
+    Lo importante no son los botones, es la frase «Mostrando 1–20 de 137».
+    Antes las consultas cortaban con LIMIT 200 sin decir nada: el usuario veía
+    200 filas y no tenía forma de saber que había 340. Eso es peor que no
+    tener paginación, porque no se nota.
+
+        <x-paginacion :pag="$pag" :f="$f" />
+
+    `ocultos` es para lo que no es un filtro y sin embargo define lo que se
+    está mirando —el día de la agenda—: sin arrastrarlo, pasar de página
+    devuelve a hoy y se pierde el tramo que se estaba recorriendo. Es el
+    mismo motivo por el que `<x-filtros>` ya lo tenía.
+--}}
+@props(['pag' => null, 'f' => null, 'ocultos' => [], 'param' => 'p'])
+
+@if ($pag)
+    @php
+        $qs = array_merge($ocultos ?: [], $f ? \App\Servicios\Listado::query($f) : []);
+        $enlace = fn (int $p) => url()->current() . '?' . http_build_query(array_merge($qs, [$param => $p]));
+
+        // Ventana alrededor de la página actual: con 50 páginas no se dibujan
+        // 50 botones, se dibujan los vecinos y los extremos.
+        $desdeP = max(1, $pag['pagina'] - 2);
+        $hastaP = min($pag['paginas'], $pag['pagina'] + 2);
+    @endphp
+
+    <div class="sgp-paginacion">
+        <div class="sgp-pag-conteo">
+            @if (! $pag['total'])
+                Sin resultados{{ $f && $f['activos'] ? ' con esos filtros' : '' }}.
+            @else
+                Mostrando <strong>{{ $pag['desde'] }}–{{ $pag['hasta'] }}</strong>
+                de <strong>{{ $pag['total'] }}</strong>
+                {{ $pag['total'] === 1 ? 'registro' : 'registros' }}
+                @if ($pag['paginas'] > 1)
+                    <span class="text-muted-warm">· página {{ $pag['pagina'] }} de {{ $pag['paginas'] }}</span>
+                @endif
+            @endif
+        </div>
+
+        @if ($pag['paginas'] > 1)
+            <nav class="sgp-pag-botones" aria-label="Páginas">
+                @if ($pag['pagina'] <= 1)
+                    <span class="sgp-pag inactivo" aria-disabled="true"><i class="bi bi-chevron-left"></i></span>
+                @else
+                    <a class="sgp-pag" href="{{ $enlace($pag['pagina'] - 1) }}" title="Anterior">
+                        <i class="bi bi-chevron-left"></i></a>
+                @endif
+
+                @if ($desdeP > 1)
+                    <a class="sgp-pag" href="{{ $enlace(1) }}">1</a>
+                    @if ($desdeP > 2)<span class="sgp-pag-puntos">…</span>@endif
+                @endif
+
+                @for ($i = $desdeP; $i <= $hastaP; $i++)
+                    @if ($i === $pag['pagina'])
+                        <span class="sgp-pag activo" aria-current="page">{{ $i }}</span>
+                    @else
+                        <a class="sgp-pag" href="{{ $enlace($i) }}">{{ $i }}</a>
+                    @endif
+                @endfor
+
+                @if ($hastaP < $pag['paginas'])
+                    @if ($hastaP < $pag['paginas'] - 1)<span class="sgp-pag-puntos">…</span>@endif
+                    <a class="sgp-pag" href="{{ $enlace($pag['paginas']) }}">{{ $pag['paginas'] }}</a>
+                @endif
+
+                @if ($pag['pagina'] >= $pag['paginas'])
+                    <span class="sgp-pag inactivo" aria-disabled="true"><i class="bi bi-chevron-right"></i></span>
+                @else
+                    <a class="sgp-pag" href="{{ $enlace($pag['pagina'] + 1) }}" title="Siguiente">
+                        <i class="bi bi-chevron-right"></i></a>
+                @endif
+            </nav>
+        @endif
+    </div>
+@endif

@@ -1,0 +1,77 @@
+/* =====================================================================
+   SGP — Las pantallas que se imprimen: el informe y los listados.
+
+   **Este archivo estaba entero muerto y no se notaba.** Sus 87 líneas
+   apuntaban a `.sgp-imp-body`, `.sgp-hoja`, `.sgp-imp-tabla` y compañía —
+   una familia de clases que NINGUNA vista dibuja—, mientras que las tres
+   pantallas que lo enlazan usan `<body class="sgp-imprimir">` con clases de
+   Bootstrap. Es el mismo caso del selector de disponibilidad de la 7.1.0 y
+   del bloque de cobro de la 7.4.0: código correcto apuntando a un marcado
+   que nunca existió, o que dejó de existir en la migración a Laravel.
+
+   Lo único que llegaba a hacer algo eran las dos reglas que no dependen de
+   una clase: `@page` y `thead{display:table-header-group}`.
+
+   Va con `media="print"`, así que en pantalla no cambia nada.
+   ===================================================================== */
+
+@page { size: A4; margin: 1.4cm; }
+
+.sgp-imprimir {
+    background: #fff;
+    color: #000;
+}
+
+/* La caja del contenido no necesita respirar en papel: el margen lo pone
+   `@page`, y sumarle el del contenedor come una línea por hoja. */
+.sgp-imprimir .container {
+    max-width: none !important;
+    padding: 0 !important;
+}
+
+/* Lo que sirve para volver o para apretar un botón no va al papel. */
+.sgp-imprimir .no-imprimir,
+.sgp-imprimir .btn { display: none !important; }
+
+/* --- Tablas ---------------------------------------------------------- */
+.sgp-imprimir .table {
+    font-size: 9.5pt;
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.sgp-imprimir .table th,
+.sgp-imprimir .table td {
+    border: 1px solid #bbb;
+    padding: .22rem .4rem;
+}
+
+.sgp-imprimir .table thead th {
+    background: #eee;
+    font-weight: 600;
+    /* Sin esto el navegador descarta los fondos al imprimir y la cabecera
+       se pierde entre las filas. */
+    -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+}
+
+/* Que una tabla larga repita su cabecera en cada hoja en vez de dejarla
+   sola al pie de la anterior. */
+.sgp-imprimir thead { display: table-header-group; }
+.sgp-imprimir tr,
+.sgp-imprimir h2 { break-inside: avoid; page-break-inside: avoid; }
+
+/* Un bloque del informe no arranca con su título al final de la hoja. */
+.sgp-imprimir h2 { break-after: avoid; page-break-after: avoid; }
+
+/* --- Legibilidad en tinta -------------------------------------------- */
+/* Los neutros cálidos del sistema son para pantalla: sobre papel blanco un
+   gris claro se pierde, así que el texto secundario se oscurece. */
+.sgp-imprimir .text-muted-warm { color: #555 !important; }
+
+/* El acento es identidad, no información: impreso en blanco y negro el
+   verde queda un gris que se lee peor que el texto normal. */
+.sgp-imprimir .txt-acento { color: #000 !important; font-weight: 600; }
+
+/* La dirección de cada enlace no aporta nada en una hoja. */
+.sgp-imprimir a[href]::after { content: none !important; }

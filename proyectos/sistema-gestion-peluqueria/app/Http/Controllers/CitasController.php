@@ -1,0 +1,2602 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Controllers;
+
+use App\Servicios\Acompanantes;
+use App\Servicios\Agenda;
+use App\Servicios\Alergias;
+use App\Servicios\Asistencia;
+use App\Servicios\Auditoria;
+use App\Servicios\Bd;
+use App\Servicios\Borrador;
+use App\Servicios\Caja;
+use App\Servicios\Canje;
+use App\Servicios\CitasVencidas;
+use App\Servicios\Cuenta;
+use App\Servicios\Listado;
+use App\Servicios\Notificaciones;
+use App\Servicios\Permisos;
+use App\Servicios\Persona;
+use App\Servicios\Sucursales;
+use App\Servicios\Sena;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\View\View;
+use Throwable;
+
+/**
+ * Citas.
+ *
+ * El motor de disponibilidad vive en App\Servicios\Agenda; acá está lo que
+ * hace la pantalla. Las dos reglas que no hay que perder de vista:
+ *
+ *  · **Agendar y reprogramar van dentro de una transacción**, porque el
+ *    procedimiento toma un candado sobre el profesional y lo suelta al
+ *    confirmar. Sin ella, dos personas se quedan con el mismo horario.
+ *  · **Registrar la atención saca de `cita_servicio` lo que se agendó y no se
+ *    hizo**, porque `sp_emitir_factura` arma el detalle desde ahí: si queda un
+ *    servicio no realizado, el cliente lo termina pagando.
+ */
+class CitasController extends Controller
+{
+    /**
+     * Cuánto antes de la hora se puede registrar una atención.
+     *
+     * **Atender antes de hora no es adelantarse: es registrar como hecho algo
+     * que no pasó.** La comisión, el consumo de stock y el cobro quedan
+     * cargados a un momento en que la clienta ni estaba. Un cuarto de hora de
+     * margen cubre a la que llega temprano, que es el caso real.
+     */
+    public const MINUTOS_ANTES_DE_ATENDER = 25;
+
+    /** Estados: 1 Programada · 2 Reprogramada · 3 Cancelada · 4 Atendida · 5 En proceso · 6 Ausente */
+    private const CERRADAS = [3, 4];
+
+    public function index(): View
+    {
+        return view('citas.index', [
+            'subs' => Permisos::tarjetasPermitidas([
+                ['p' => 'citas.agenda', 'ruta' => 'citas.agenda', 'ic' => 'calendar-week',
+                 't' => 'Agenda', 'd' => 'Citas del día y próximas'],
+                ['p' => 'citas.agenda', 'ruta' => 'citas.form', 'ic' => 'calendar-plus',
+                 't' => 'Nueva cita', 'd' => 'Agendar con control de disponibilidad'],
+                ['p' => 'citas.ausencias', 'ruta' => 'citas.ausencias', 'ic' => 'calendar-x',
+                 't' => 'Excepciones', 'd' => 'Feriados, licencias y bloqueos'],
+            ]),
+        ]);
+    }
+
+    /** Huecos reales para la pantalla de Nueva cita (lo consume el JS). */
+    public function disponibilidad(Request $request): JsonResponse
+    {
+        $servicios = array_map('intval', (array) $request->query('servicios', []));
+        $idUsuario = ((int) $request->query('id_usuario', 0)) ?: null;
+        $idSucursal = ((int) $request->query('sucursal', 0)) ?: Sucursales::activa();
+
+        // **Cuántas personas vienen cambia cuánto dura la cita.** Dos servicios
+        // sobre la cabeza van en serie sobre UNA clienta; sobre dos, con dos
+        // peluqueras, van a la vez. Sin este dato el sistema medía siempre el
+        // peor caso y contestaba «no entra en el turno» a una cita que el salón
+        // hace todos los días.
+        $personas = max(1, min(20, (int) $request->query('personas', 1)));
+        // **Y cuántas veces va cada servicio**: un servicio marcado para dos
+        // personas son dos, y eso cambia la duración (7.119.0).
+        Agenda::vecesPorServicio((array) $request->query('veces', []), $servicios);
+        // **Y con quién quiere atenderse CADA servicio.**
+        //
+        // Sin esto el calendario ofrecía horarios fuera del turno de las
+        // personas que la clienta acababa de elegir: la consulta llevaba un
+        // solo `id_usuario`, así que con dos servicios en dos manos distintas
+        // el navegador mandaba cero —«cualquiera»— y el servidor contestaba con
+        // los huecos del equipo entero. Ver `Agenda::acotarPedidos()`.
+        $pedidos = Agenda::pedidosDe((array) $request->query('prof', []));
+        $duracion = Agenda::duracionPrevista($servicios, $personas, $idSucursal, $idUsuario, $pedidos);
+
+        if ($duracion <= 0) {
+            return response()->json(['ok' => false, 'motivo' => 'Elegí primero el o los servicios.']);
+        }
+        if ($idUsuario && ! DB::scalar(
+            'SELECT COUNT(*) FROM usuario u JOIN rol r ON r.id_rol = u.id_rol
+              WHERE u.id_usuario = ? AND u.activo = 1 AND r.es_personal = 1', [$idUsuario]
+        )) {
+            return response()->json(['ok' => false, 'motivo' => 'Ese profesional ya no está disponible.']);
+        }
+
+        $fecha = (string) $request->query('fecha', '');
+        if ($fecha !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) {
+            if ($idUsuario && ! Agenda::trabajaEseDia($idUsuario, $fecha, $idSucursal)) {
+                return response()->json([
+                    'ok' => true, 'duracion' => $duracion, 'horas' => [],
+                    'motivo' => 'Ese profesional no trabaja el ' . fecha($fecha, 'd/m/Y') . '. Elegí otra persona o fecha.',
+                ]);
+            }
+            // Con su duración y con quién, y el porqué si no hay ninguna: es el
+            // mismo bloque que el portal, para que las dos pantallas digan lo
+            // mismo de la misma agenda.
+            return response()->json(['ok' => true, 'duracion' => $duracion]
+                + Agenda::horasDelDia($idUsuario, $fecha, $duracion, $idSucursal, $servicios, $personas, $pedidos, null));
+        }
+
+        // **Los días en que esa clienta ya tiene esos servicios no se
+        // ofrecen.** La regla es de la 7.14.0 y la hacía cumplir el disparador
+        // al guardar, con el formulario ya completo: sacándolos de la lista, el
+        // rechazo deja de poder ocurrir. La clienta se elige en esta misma
+        // pantalla, así que viaja en la consulta.
+        $idCliente = (int) $request->query('id_cliente', 0);
+        $dias = array_values(array_diff(
+            Agenda::diasConCupo($idUsuario, date('Y-m-d'), (int) config('sgp.agenda.dias_vista', 60), $duracion, $idSucursal, $servicios, $personas, $pedidos),
+            Agenda::diasYaTomados($idCliente, $servicios)
+        ));
+
+        return response()->json([
+            'ok' => true, 'duracion' => $duracion,
+            'duracion_fija' => (bool) $idUsuario || count($pedidos) >= count(array_unique($servicios)),
+            // Vacío, se dice por qué: lo que no entra en ningún turno, o quién
+            // de las pedidas es la que no coincide con las demás.
+            'motivo' => $dias ? null
+                : (Agenda::motivoSinCupo($duracion, $idUsuario, $idSucursal, $servicios, $personas, $pedidos)
+                    ?? Agenda::porQueNoHayDia($servicios, $personas, $pedidos, $idSucursal)),
+            'dias' => $dias,
+        ]);
+    }
+
+    // -----------------------------------------------------------------
+    //  Agenda del día
+    // -----------------------------------------------------------------
+
+    public function agenda(Request $request): View
+    {
+        // Punto de recuperación si el scheduler estuvo detenido: una cita que
+        // ya pasó 24 horas no puede seguir Programada al día siguiente. Como
+        // se consulta la fecha vigente, reprogramar reinicia el contador.
+        CitasVencidas::cerrarPendientes();
+        Asistencia::marcarEntradasVencidas();
+        $dia = (string) $request->query('dia', date('Y-m-d'));
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dia) || ! strtotime($dia)) {
+            $dia = date('Y-m-d');
+        }
+        $verTodo = $this->veTodaLaAgenda();
+
+        $par = ['d' => $dia];
+        $soloMias = '';
+        if (! $verTodo) {
+            // **Una cita es mía si trabajo en ella, no sólo si es mía.**
+            // Preguntaba únicamente por `c.id_usuario`, o sea por el DUEÑO de
+            // la cita, y desde la 5.3.0 una cita se reparte: la clienta pide
+            // mechas con Lucía y manicura con Rocío, la cita queda a nombre de
+            // una —`principalDelReparto()`— y la otra **no la veía en su
+            // agenda**. El día de la cita se enteraba porque la clienta se
+            // sentaba en su sillón.
+            //
+            // El reparto vive en `cita_servicio.id_usuario`, y **un NULL ahí no
+            // es «nadie»: es el dueño de la cita** —así se representa «lo hace
+            // quien la tiene» desde siempre—, que es justo el caso que la
+            // primera condición ya cubre.
+            $soloMias = ' AND (c.id_usuario = :yo1
+                               OR EXISTS (SELECT 1 FROM cita_servicio cs0
+                                           WHERE cs0.id_cita = c.id_cita AND cs0.id_usuario = :yo2))';
+            $par['yo1'] = $par['yo2'] = (int) session('uid');
+        }
+
+        // **La agenda es la del local en el que se está trabajando.**
+        // Sin esto, el Administrador que entra a una sucursal veía también las
+        // citas de la otra mezcladas en la misma grilla, y el mismo horario
+        // aparecía ocupado por alguien que atiende a treinta cuadras.
+        $soloMias .= Sucursales::filtro('c', $par);
+
+        // **Filtros.** Un día cargado son treinta filas, y buscar «las de
+        // Carmen» o «las que faltan atender» era recorrerlas a ojo. Todos
+        // arrancan en «Todos»: la agenda del día tiene que seguir mostrando el
+        // día entero si nadie pide otra cosa.
+        $opEstado = ['' => 'Todos'];
+        foreach (DB::select('SELECT id_estado_cita, nombre FROM estado_cita ORDER BY id_estado_cita') as $e) {
+            $opEstado[(string) $e->id_estado_cita] = $e->nombre;
+        }
+
+        $opProf = ['' => 'Todos'];
+        foreach (Agenda::profesionales() as $pr) {
+            $opProf[(string) $pr->id_usuario] = $pr->nombre;
+        }
+
+        $opServ = ['' => 'Todos'];
+        foreach (DB::select('SELECT id_servicio, nombre FROM servicio WHERE activo = 1 ORDER BY nombre') as $sv) {
+            $opServ[(string) $sv->id_servicio] = $sv->nombre;
+        }
+
+        // **La agenda mostraba UN día y no había forma de ver el conjunto.**
+        // Para contestar «¿qué tengo esta semana?» o «¿cuándo vino Carmen la
+        // última vez?» había que ir día por día con la flecha, y una cita de
+        // hace tres meses era inalcanzable en la práctica. El día sigue siendo
+        // lo que se abre por defecto —es la pantalla de trabajo del salón— y
+        // el rango es lo que se pide cuando hace falta mirar más lejos.
+        $campos = ['rango' => ['tipo' => 'select', 'etiqueta' => 'Ver', 'ancho' => '170px',
+                               'opciones' => [
+                                   '' => 'Sólo este día',
+                                   'sem' => 'Esta semana',
+                                   'mes' => 'Este mes',
+                                   'prox' => 'Todas las próximas',
+                                   'todas' => 'Todas',
+                               ]]];
+        $campos += ['cliente' => ['tipo' => 'texto', 'etiqueta' => 'Cliente',
+                                  'ph' => 'Nombre de la clienta', 'ancho' => '200px']];
+        // Quien sólo ve lo suyo no elige profesional: hay una sola respuesta.
+        if ($verTodo) {
+            $campos['prof'] = ['tipo' => 'select', 'etiqueta' => 'Profesional',
+                               'opciones' => $opProf, 'ancho' => '190px'];
+        }
+        $campos['servicio'] = ['tipo' => 'select', 'etiqueta' => 'Servicio',
+                               'opciones' => $opServ, 'ancho' => '190px'];
+        $campos['estado'] = ['tipo' => 'select', 'etiqueta' => 'Estado',
+                             'opciones' => $opEstado, 'ancho' => '160px'];
+
+        $f = Listado::filtros($campos);
+
+        // Qué tramo se mira. `$par['d']` sigue viajando siempre porque el
+        // encabezado y la navegación de días lo usan aunque el rango sea otro.
+        $rango = Listado::valor($f, 'rango');
+        $rangoSql = match ($rango) {
+            'sem' => 'v.fecha_hora >= :d1 AND v.fecha_hora < DATE_ADD(:d2, INTERVAL 7 DAY)',
+            'mes' => 'YEAR(v.fecha_hora) = YEAR(:d1) AND MONTH(v.fecha_hora) = MONTH(:d2)',
+            'prox' => 'v.fecha_hora >= :d1',
+            'todas' => '1 = 1',
+            default => 'DATE(v.fecha_hora) = :d1',
+        };
+        // Los marcadores con nombre no se pueden repetir: la conexión prepara
+        // de verdad, así que cada uso lleva el suyo.
+        // **Sólo los marcadores que la consulta usa de verdad.** La conexión
+        // prepara de forma nativa, así que pasarle uno de más no se ignora:
+        // contesta «Invalid parameter number» y la agenda entera devuelve 500.
+        // El día por defecto usa `:d1` solo; la semana y el mes, los dos.
+        unset($par['d']);
+        if ($rango !== 'todas') {
+            $par['d1'] = $dia;
+        }
+        if (in_array($rango, ['sem', 'mes'], true)) {
+            $par['d2'] = $dia;
+        }
+
+        if (Listado::hay($f, 'cliente')) {
+            $soloMias .= ' AND v.cliente LIKE :cli';
+            $par['cli'] = '%' . Listado::valor($f, 'cliente') . '%';
+        }
+        if (Listado::hay($f, 'prof')) {
+            // Mismo criterio que «mis citas»: filtrar por alguien tiene que
+            // traer todo lo que esa persona atiende, no sólo lo que tiene a su
+            // nombre — si no, el filtro contesta distinto que la agenda propia.
+            $soloMias .= ' AND (c.id_usuario = :prof1
+                                OR EXISTS (SELECT 1 FROM cita_servicio cs1
+                                            WHERE cs1.id_cita = c.id_cita AND cs1.id_usuario = :prof2))';
+            $par['prof1'] = $par['prof2'] = (int) Listado::valor($f, 'prof');
+        }
+        if (Listado::hay($f, 'estado')) {
+            $soloMias .= ' AND c.id_estado_cita = :est';
+            $par['est'] = (int) Listado::valor($f, 'estado');
+        }
+        if (Listado::hay($f, 'servicio')) {
+            // El servicio puede estar en el reparto o suelto: alcanza con que
+            // la cita lo tenga.
+            $soloMias .= ' AND EXISTS (SELECT 1 FROM cita_servicio cs9
+                                        WHERE cs9.id_cita = c.id_cita AND cs9.id_servicio = :srv)';
+            $par['srv'] = (int) Listado::valor($f, 'servicio');
+        }
+
+        // **Un rango sin paginar es una pantalla que no se puede abrir.** «Todas»
+        // sobre un salón con un año de operación son miles de filas, y cada una
+        // trae seis subconsultas. El día se deja generoso —nunca llega a cien
+        // citas— para que la pantalla de trabajo no cambie de forma; el rango
+        // pagina como el resto del sistema. El WHERE se arma UNA vez y lo
+        // comparten el conteo y la página, o el «de 137» deja de coincidir.
+        $conteoSql = "FROM vw_agenda_citas v
+               JOIN cita c ON c.id_cita = v.id_cita
+               JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+              WHERE $rangoSql $soloMias";
+        $pag = Listado::paginacion((int) DB::scalar("SELECT COUNT(*) $conteoSql", $par),
+            $rango === '' ? 100 : 25);
+
+        // El comprobante viene en la misma consulta porque la agenda tiene que
+        // poder contestar «¿esto ya se cobró?» sin salir de la pantalla: una
+        // cita queda Atendida y el dinero todavía no entró, y como la clienta
+        // no siempre pide factura, nadie se acuerda de pasar por Facturación.
+        // Se mira sólo el comprobante NO anulado (estado 1). `nro_comprobante`
+        // NO es una columna de `factura`: lo arma `fn_factura_nro()`.
+        // **Qué de esta cita es MÍO.** Quien ve su propia agenda necesita dos
+        // cosas que la fila no decía: **qué servicios le pidieron a ella** —de
+        // los cuatro de la cita puede tocarle uno— y **con quién más la
+        // atiende**, que la columna «Profesional» sólo se dibuja para quien ve
+        // la agenda entera.
+        //
+        // Van en `$parLista` y no en `$par`: el `COUNT(*)` de arriba **no** las
+        // lleva en su SELECT, y un marcador de más en una consulta que no lo
+        // usa es `SQLSTATE[HY093]` — la conexión prepara de forma nativa.
+        $parLista = $par;
+        $colsMias = "NULL AS mis_servicios, NULL AS otros_profesionales,";
+        if (! $verTodo) {
+            $colsMias = "(SELECT GROUP_CONCAT(DISTINCT sm.nombre ORDER BY sm.nombre SEPARATOR ', ')
+                            FROM cita_servicio csm
+                            JOIN servicio sm ON sm.id_servicio = csm.id_servicio
+                           WHERE csm.id_cita = v.id_cita
+                             AND COALESCE(csm.id_usuario, c.id_usuario) = :mio1) AS mis_servicios,
+                         (SELECT GROUP_CONCAT(DISTINCT CONCAT(pe_ot.nombre,' ',pe_ot.apellido)
+                                              ORDER BY pe_ot.nombre, pe_ot.apellido SEPARATOR ', ')
+                            FROM cita_servicio cso
+                            JOIN usuario uo ON uo.id_usuario = COALESCE(cso.id_usuario, c.id_usuario)
+                            JOIN persona pe_ot ON pe_ot.id_persona = uo.id_persona
+                           WHERE cso.id_cita = v.id_cita
+                             AND COALESCE(cso.id_usuario, c.id_usuario) <> :mio2) AS otros_profesionales,";
+            $parLista['mio1'] = $parLista['mio2'] = (int) session('uid');
+        }
+
+        $rows = DB::select(
+            "SELECT v.*,
+                    -- **La seña es lo que se cobró POR ADELANTADO, no todo lo
+                    -- que entró contra la cita.** `fn_cita_sena` suma cada cobro
+                    -- sin factura, y desde la 7.19.0 el cobro de la atención
+                    -- también va contra la cita: así que una atención cobrada
+                    -- entera aparecía en la agenda rotulada «seña Gs. 280.000»,
+                    -- o sea el total de la cita presentado como adelanto.
+                    --
+                    -- Es el mismo defecto que la 7.41.0 corrigió en el
+                    -- comprobante y en Cobros, y que acá había quedado sin
+                    -- tocar: se distingue por la observación, que
+                    -- `sp_registrar_sena` deja en «Sena de reserva» y el
+                    -- controlador pisa con «Cobro de la atencion».
+                    (SELECT COALESCE(SUM(co.monto), 0) FROM cobro co
+                      WHERE co.id_cita = v.id_cita AND co.id_estado_cobro = 1
+                        AND COALESCE(co.observaciones, '') NOT LIKE 'Cobro de la atencion%') AS sena,
+                    -- Todo lo que entró contra la cita, seña incluida: es contra
+                    -- esto que se calcula lo que falta cobrar.
+                    fn_cita_sena(v.id_cita) AS cobrado_cita,
+                    -- **Lo que la clienta dejó dicho al reservar.** `observaciones`,
+                    -- para quién es y cuántas van se guardaban desde el portal y
+                    -- **no se mostraban en ninguna pantalla**: quien atiende no
+                    -- tenía forma de saber que la cita era para la hija de la
+                    -- clienta, ni cuánta gente esperar.
+                    c.para_otra_persona, c.nombre_para, c.personas, c.id_cliente,
+                    c.id_usuario, c.id_sucursal,
+                    -- **Y la alergia de ESA persona, que no es la de la ficha
+                    -- de al lado.** Con la cita marcada «para otra persona»,
+                    -- quien se sienta en el sillón es la del `nombre_para`: la
+                    -- alergia de la clienta que reservó no dice nada de ella,
+                    -- y hasta la 7.113.0 era la única que la fila mostraba.
+                    c.alergias_para,
+                    -- **Las alergias de la clienta, en la fila.** Es el único
+                    -- dato de la ficha que puede lastimar a alguien si nadie lo
+                    -- mira, y hasta acá vivía dentro de `observaciones`, mezclado
+                    -- con «prefiere las 10»: quien prepara la mezcla no entraba
+                    -- a leerlas. Viene en la misma consulta porque en la vista,
+                    -- dentro del `foreach`, sería una consulta por cita.
+                    (SELECT cl2.alergias FROM cliente cl2
+                      WHERE cl2.id_cliente = c.id_cliente) AS alergias,
+                    -- **Un `id_usuario` en NULL no es «nadie»: es el dueño de la
+                    -- cita.** Es como `cita_servicio` representa «lo hace quien
+                    -- la tiene», y esta subconsulta lo descartaba con un
+                    -- `IS NOT NULL`: una cita con dos servicios en manos
+                    -- distintas —uno explícito y el otro del dueño— mostraba
+                    -- **una sola profesional** en la columna, así que quien lee
+                    -- la agenda no sabía que iban a atenderla entre dos.
+                    --
+                    -- Se resuelve con el mismo `COALESCE` que usa el resto del
+                    -- sistema para leer esa columna.
+                    (SELECT GROUP_CONCAT(DISTINCT CONCAT(pe_pr.nombre,' ',pe_pr.apellido)
+                                         ORDER BY pe_pr.nombre, pe_pr.apellido SEPARATOR ', ')
+                       FROM cita_servicio csp
+                       JOIN usuario up ON up.id_usuario = COALESCE(csp.id_usuario, c.id_usuario)
+                       JOIN persona pe_pr ON pe_pr.id_persona = up.id_persona
+                      WHERE csp.id_cita = v.id_cita) AS profesionales,
+                    -- Los servicios de la cita, para el selector de horarios del
+                    -- modal de reprogramar: son fijos, la cita ya los tiene.
+                    (SELECT GROUP_CONCAT(csv.id_servicio)
+                       FROM cita_servicio csv WHERE csv.id_cita = v.id_cita) AS servicios_ids,
+                    $colsMias
+                    (SELECT ss.id_solicitud FROM sena_solicitud ss
+                      WHERE ss.id_cita = v.id_cita AND ss.id_cobro IS NULL AND ss.rechazada_en IS NULL
+                      ORDER BY ss.id_solicitud LIMIT 1) AS id_solicitud,
+                    (SELECT ss.monto FROM sena_solicitud ss
+                      WHERE ss.id_cita = v.id_cita AND ss.id_cobro IS NULL AND ss.rechazada_en IS NULL
+                      ORDER BY ss.id_solicitud LIMIT 1) AS sena_pedida,
+                    -- El comprobante que adjuntó: es lo que deja confirmar sin
+                    -- llamar al banco ni creerle de palabra.
+                    (SELECT ss.comprobante FROM sena_solicitud ss
+                      WHERE ss.id_cita = v.id_cita AND ss.id_cobro IS NULL AND ss.rechazada_en IS NULL
+                      ORDER BY ss.id_solicitud LIMIT 1) AS sena_comprobante,
+                    f.id_factura,
+                    -- **Cuánto vale la cita, CON su descuento.** Antes era la suma
+                    -- de los precios de lista, así que el modal ofrecía cobrar de
+                    -- más: `sp_emitir_factura` aplica el mejor descuento entre el
+                    -- del nivel y la promoción vigente, y la pantalla no lo sabía.
+                    --
+                    -- `fn_cita_total` es la misma regla resuelta sobre la cita, o
+                    -- sea antes de que exista la factura.
+                    fn_cita_total(v.id_cita) AS total_cita,
+                    -- El precio de lista se conserva para poder MOSTRAR el
+                    -- descuento: un total más bajo sin explicación se lee como un
+                    -- error de la pantalla.
+                    (SELECT COALESCE(SUM(s2.precio),0) FROM cita_servicio cs2
+                       JOIN servicio s2 ON s2.id_servicio = cs2.id_servicio
+                      WHERE cs2.id_cita = v.id_cita) AS total_lista,
+                    -- Cuánta seña pide el salón por esta cita: sale de
+                    -- `servicio.sena_porcentaje`, no de lo que se tipee.
+                    fn_cita_sena_requerida(v.id_cita) AS sena_requerida,
+                    -- **¿La persona para la que es la cita ya tiene ficha?** Si la
+                    -- tiene, lo que hace falta desde acá es abrirle SU historial —
+                    -- qué le hicieron la vez pasada, qué color usa— y no ofrecer
+                    -- crearla de nuevo, que dejaría dos fichas de la misma persona
+                    -- y el historial partido en dos.
+                    (SELECT cl.id_cliente
+                       FROM cliente cl
+                       JOIN persona pe ON pe.id_persona = cl.id_persona
+                      WHERE c.para_otra_persona = 1
+                        AND LOWER(TRIM(CONCAT(pe.nombre, ' ', COALESCE(pe.apellido, ''))))
+                            = LOWER(TRIM(c.nombre_para))
+                      ORDER BY cl.id_cliente LIMIT 1) AS id_cliente_para,
+                    CASE WHEN f.id_factura IS NULL THEN NULL
+                         ELSE fn_factura_nro(f.id_factura) END AS nro_comprobante,
+                    CASE WHEN f.id_factura IS NULL THEN NULL
+                         ELSE fn_factura_saldo(f.id_factura) END AS saldo,
+                    -- **Los comprobantes POR PERSONA de la cita de varias.** Cada
+                    -- una puede irse con el suyo (`factura.persona`, 7.117.0), así
+                    -- que la fila tiene que saber cuántos hay y cuánto deben entre
+                    -- todos; el detalle por persona lo trae `Acompanantes::cuenta()`.
+                    (SELECT COUNT(*) FROM factura fi
+                      WHERE fi.id_cita = v.id_cita AND fi.id_estado_factura = 1
+                        AND fi.persona IS NOT NULL) AS facturas_ind,
+                    (SELECT COALESCE(SUM(fn_factura_saldo(fi2.id_factura)), 0) FROM factura fi2
+                      WHERE fi2.id_cita = v.id_cita AND fi2.id_estado_factura = 1
+                        AND fi2.persona IS NOT NULL) AS saldo_ind
+               FROM vw_agenda_citas v
+               JOIN cita c ON c.id_cita = v.id_cita
+               JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+               -- El comprobante de TODA la cita. Los de una persona sola van en
+               -- las subconsultas de arriba: unidos acá, una cita con tres
+               -- comprobantes saldría tres veces en la agenda.
+               LEFT JOIN factura f ON f.id_cita = v.id_cita AND f.id_estado_factura = 1 AND f.persona IS NULL
+              WHERE $rangoSql $soloMias
+              -- **Primero lo que falta hacer, y dentro por hora.** El peso sale
+              -- de lo que la cita todavía pide del salón: lo que ocupa la
+              -- agenda arriba, lo atendido después, y lo que no va a ocurrir
+              -- —cancelada, ausente— al final. Sale de `bloquea_agenda` y no de
+              -- una lista de ids escrita a mano, que es como el panel se quedó
+              -- corto en la 7.52.1 al entrar Atrasada.
+              -- En un rango el orden por estado no sirve: mezclaría marzo con
+              -- agosto en el mismo bloque. Ahí manda la fecha, que es lo que
+              -- se está mirando; dentro de UN día sigue mandando qué falta hacer.
+              ORDER BY " . ($rango === ''
+                    ? 'CASE
+                         WHEN ec.bloquea_agenda = 1 THEN 1
+                         WHEN c.id_estado_cita = 4 THEN 2
+                         ELSE 3
+                       END,
+                       v.fecha_hora'
+                    : ($rango === 'todas' ? 'v.fecha_hora DESC' : 'v.fecha_hora')) . "
+              LIMIT {$pag['porPagina']} OFFSET {$pag['offset']}", $parLista
+        );
+
+        // La seña mueve plata: el botón solo aparece si el rol maneja caja
+        $puedeCobrar = Permisos::puede('facturacion.cobros');
+        $puedeReasignar = Permisos::esAdmin() || Permisos::puede('personal.turnos');
+
+        // La agenda necesita saber si «En proceso» va a ser aceptado por el
+        // servidor. Se calcula una vez por fila y se vuelve a comprobar al
+        // hacer el POST, porque la tolerancia puede vencer entre ambas cosas.
+        foreach ($rows as $row) {
+            $fichaje = $this->estadoFichaje($row);
+            $row->fichaje_ok = (bool) ($fichaje['ok'] ?? false);
+            $row->fichaje_futura = (bool) ($fichaje['futura'] ?? false);
+            $row->fichaje_turno = $fichaje['turno'] ?? null;
+            // **«Falta fichaje» y «está marcado ausente» no son lo mismo.** Si
+            // a esa persona ya se la dio por ausente hoy, no va a fichar: lo
+            // que hay que hacer no es esperar, es cambiarle el profesional a
+            // la cita. Decir «falta fichaje» manda a esperar algo que no va a
+            // pasar.
+            $row->prof_ausente = ! $row->fichaje_ok && $this->marcadoAusente($row);
+        }
+
+        return view('citas.agenda', [
+            'rows' => $rows,
+            'dia' => $dia,
+            // Desde cuántos minutos antes se puede atender: la fila dibuja «En
+            // proceso» y «Registrar atención» recién ahí (7.127.0).
+            'minutosAntes' => self::MINUTOS_ANTES_DE_ATENDER,
+            'ahora' => ahora_bd(),
+            'pag' => $pag,
+            'rango' => $rango,
+            'verTodo' => $verTodo,
+            'puedeCobrar' => $puedeCobrar,
+            'metodos' => $puedeCobrar
+                ? DB::select(// `tipo` lo necesita el componente de cobro para saber qué detalle pedir:
+                // tarjeta, banco o nada. Sin él la pantalla revienta al dibujarse.
+                "SELECT id_metodo_pago, nombre, tipo FROM metodo_pago
+                  WHERE activo = 1 ORDER BY (tipo = 'EFECTIVO') DESC, nombre")
+                : [],
+            'caja' => $puedeCobrar ? Caja::abierta() : null,
+            // **Sin caja abierta se cobra igual lo que llega por transferencia**
+            // (7.121.0): va a la cuenta bancaria, que es su propia caja. Con
+            // alguna cuenta cargada la ventana de cobro se ofrece aunque el
+            // cajón esté cerrado; el efectivo lo rechaza el servidor.
+            'hayCuentas' => $puedeCobrar && count(Cuenta::deSucursal((int) Sucursales::activa())) > 0,
+            // Emitir el comprobante es de `facturacion.facturas`, no de cobros:
+            // son dos permisos distintos y quien sólo cobra no debería emitir.
+            'puedeFacturar' => Permisos::puede('facturacion.facturas'),
+            // **Cambiar el profesional es administración, no mostrador.** La
+            // clienta eligió a alguien, muchas veces por algo, así que
+            // cambiárselo es una decisión del salón — y quien atiende no
+            // debería poder moverse citas entre sí. Lo tienen el Administrador
+            // y quien administra los turnos, que son los que saben quién
+            // trabaja cuándo. `reasignarUna()` lo vuelve a comprobar.
+            'puedeReasignar' => $puedeReasignar,
+            // **Se cargan si puede reasignar, no sólo si es Administrador.**
+            // Con `esAdmin()` a secas, quien tiene `personal.turnos` veía el
+            // modal con el combo VACÍO: una pantalla que ofrece una acción que
+            // no se puede completar.
+            'profs' => $puedeReasignar ? Agenda::profesionales() : [],
+            // **Quién puede tomar cada cita.** No alcanza con listar al equipo:
+            // reasignar una coloración a la manicurista deja la agenda coherente
+            // y el salón sin poder dar el servicio, y la clienta se entera el día
+            // de la cita. El servidor lo rechaza igual, pero un combo que ofrece
+            // a alguien que va a ser rechazado promete algo que no cumple.
+            'profsPorCita' => $puedeReasignar ? $this->profesionalesPorCita($rows) : [],
+
+            // **El mismo desglose que ve la clienta en el portal.** Quien
+            // confirma el pago tiene que poder comprobar el número: con un
+            // total suelto no sabe si esa seña es de un servicio o de tres.
+            // Sólo de las que piden algo — para el resto el bloque no se
+            // dibuja, así que traerlo sería una consulta al pedo por fila.
+            'desglosesSena' => $this->desglosesDeSena($rows),
+            // Quiénes vienen con la clienta. Se piden para TODAS las filas de
+            // una vez: una consulta por renglón sería una por cada cita del día.
+            'acompanantes' => $acompanantes = Acompanantes::deCitas(array_map(fn ($r) => (int) $r->id_cita, $rows)),
+            // **La cuenta de cada persona, en las citas de varias.** Es lo que
+            // deja cobrar y facturar junto o por separado, y decir en la fila
+            // qué servicio es de quién. Sólo para las que lo necesitan: en una
+            // cita de una sola persona no hay nada que repartir.
+            'cuentas' => $this->cuentasPorPersona($rows, $acompanantes),
+            'f' => $f,
+        ]);
+    }
+
+    /**
+     * La cuenta por persona de cada cita de varias que haya en la pantalla.
+     *
+     * @param  array<int,object>  $rows
+     * @param  array<int,array<int,object>>  $acompanantes
+     * @return array<int,array<int,array<string,mixed>>>  [id_cita => [persona => cuenta]]
+     */
+    private function cuentasPorPersona(array $rows, array $acompanantes): array
+    {
+        $out = [];
+        foreach ($rows as $r) {
+            if ((int) ($r->personas ?? 1) > 1) {
+                $out[(int) $r->id_cita] = Acompanantes::cuenta($r, $acompanantes[(int) $r->id_cita] ?? []);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Para cada cita, qué profesionales pueden hacer TODOS sus servicios.
+     *
+     * Se resuelve en una consulta y no una por cita: son las citas del día
+     * contra el equipo del salón —treinta por siete en el peor caso— y con una
+     * consulta por fila la agenda de un día cargado haría treinta viajes.
+     *
+     * `fn_usuario_hace_servicio` es la misma autoridad que valida el reparto al
+     * agendar, con su criterio permisivo: quien no tiene ningún servicio
+     * cargado los hace todos.
+     *
+     * @param  array<int,object>  $rows
+     * @return array<int,array<int,bool>>  [id_cita => [id_usuario => true]]
+     */
+    private function profesionalesPorCita(array $rows): array
+    {
+        $ids = array_values(array_unique(array_map(static fn ($r) => (int) $r->id_cita, $rows)));
+        if (! $ids) {
+            return [];
+        }
+
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $filas = DB::select(
+            "SELECT c.id_cita, u.id_usuario
+               FROM cita c
+               CROSS JOIN usuario u
+               JOIN rol r ON r.id_rol = u.id_rol AND r.es_personal = 1
+              WHERE c.id_cita IN ($marcas) AND u.activo = 1
+                AND NOT EXISTS (SELECT 1 FROM cita_servicio cs
+                                 WHERE cs.id_cita = c.id_cita
+                                   AND fn_usuario_hace_servicio(u.id_usuario, cs.id_servicio) = 0)",
+            $ids
+        );
+
+        $por = [];
+        foreach ($filas as $f) {
+            $por[(int) $f->id_cita][(int) $f->id_usuario] = true;
+        }
+
+        return $por;
+    }
+
+    /**
+     * El desglose de la seña de cada cita que la pide.
+     *
+     * @param  array<int, object>  $citas
+     * @return array<int, array{filas: array<int, object>, total: float, lista: float}>
+     */
+    private function desglosesDeSena(array $citas): array
+    {
+        $out = [];
+        foreach ($citas as $c) {
+            // **También para las que no piden seña, y ése era el defecto.**
+            //
+            // El desglose se armaba sólo con `sena_requerida > 0`, y de ahí
+            // sale además **de dónde viene el descuento** —«por su nivel Oro»,
+            // «por la promoción X»—. O sea que en la mayoría de las citas, que
+            // no piden seña, el modal mostraba el renglón «Descuento» con un
+            // número y sin decir cuál de los dos lo puso: exactamente lo que
+            // este proyecto se propuso evitar, porque quien cobra no puede
+            // defender un número que no puede explicar.
+            //
+            // La cita ya está en memoria y son dos consultas por fila; el
+            // modal las necesita todas, así que no hay nada que ahorrar
+            // saltándose la mitad.
+            if ((float) ($c->sena_requerida ?? 0) > 0 || ! $c->nro_comprobante) {
+                $out[(int) $c->id_cita] = Sena::desglose((int) $c->id_cita);
+            }
+        }
+
+        return $out;
+    }
+
+    public function form(Request $request): View
+    {
+        // **El formulario se limpia solo.**
+        //
+        // Lo que llena los campos es `old()`, y `old()` sirve para una sola
+        // cosa: que un intento fallido vuelva con lo que la persona ya había
+        // cargado, para corregir y reintentar. Pero el borrador de un alta
+        // rápida —crear una clienta sin salir de acá— también deja escrito
+        // `_old_input`, y ese sí sobrevive a que la persona abandone la
+        // pantalla: al volver a «Nueva cita» aparecían la clienta y los
+        // servicios de la cita anterior, que es justo lo que no se quiere.
+        //
+        // Se distingue por el rastro que deja cada camino: el error redirige
+        // con `sgp_form_error`. Sin esa marca, la visita es nueva y se olvida
+        // lo que haya quedado. No hace falta ningún botón.
+        if (! $request->session()->get('sgp_form_error')) {
+            $request->session()->forget('_old_input');
+        }
+
+        return view('citas.form', [
+            'clientes' => DB::select(
+                // `alergias` viaja con cada clienta porque se la elige en esta
+                // misma pantalla: el campo se llena solo al elegirla, igual que
+                // los canjes. Sin eso arrancaría vacío y agendarle una cita le
+                // borraría lo que ya tenía cargado — ver `Alergias`.
+                'SELECT c.id_cliente, pe.nombre, pe.apellido, pe.cedula, pe.telefono, c.alergias
+                   FROM cliente c JOIN persona pe ON pe.id_persona = c.id_persona
+                  WHERE c.activo = 1 ORDER BY pe.apellido, pe.nombre'
+            ),
+            'profs' => Agenda::profesionales(),
+            // **Cada combo ofrece sólo a quien hace ESE servicio.** Listando al
+            // equipo entero se podía pedir una coloración con quien sólo hace
+            // uñas, y el rechazo llegaba después de elegir día y hora.
+            'haceServicio' => Agenda::mapaHaceServicio(),
+            'servicios' => DB::select(
+                'SELECT s.id_servicio, s.nombre, s.precio, s.duracion_min, s.requiere_exclusividad,
+                        s.descripcion, s.imagen, cs.nombre AS categoria,
+                        -- **Acá el descuento va SIN clienta, y es a propósito.**
+                        -- Se la elige en esta misma pantalla, así que el del
+                        -- nivel cambiaría con el combo; lo que se muestra son
+                        -- las promociones vigentes, que valen para cualquiera.
+                        -- Es el piso, no una promesa de más: si además tiene
+                        -- nivel, la factura descuenta el mejor de los dos.
+                        fn_servicio_descuento_monto(s.id_servicio, NULL) AS descuento
+                   FROM servicio s
+                   JOIN categoria_servicio cs ON cs.id_categoria_servicio = s.id_categoria_servicio
+                  WHERE s.activo = 1 ORDER BY cs.nombre, s.nombre'
+            ),
+            'sel_cliente' => (int) $request->query('cliente', 0),
+            // **Los canjes también se usan desde el mostrador.** Hasta la
+            // 7.28.0 el campo `canjes[]` existía sólo en el portal, así que a
+            // la clienta que canjeaba en el local —que es la mayoría: no tiene
+            // cuenta— se le descontaban los puntos y no tenía dónde gastar el
+            // vale. En 60 días se hicieron 5 canjes y se usó 0.
+            //
+            // Vienen los de TODAS las clientas porque la clienta se elige en
+            // esta misma pantalla; el JS muestra los de la elegida.
+            'canjes' => Canje::disponiblesDelSalon(),
+        ]);
+    }
+
+    public function guardar(Request $request): RedirectResponse
+    {
+        $idCliente = (int) $request->input('id_cliente', 0);
+        // **Nueva cita ya no manda este campo**: el combo suelto de profesional
+        // salió en la 7.67.0 porque preguntaba lo mismo que el de cada
+        // servicio. Se sigue leyendo porque otras pantallas sí lo mandan, y
+        // porque 0 cae en el reparto, que es lo que hacía «sin preferencia».
+        $idUsuario = (int) $request->input('id_usuario', 0);
+        $fecha = str_replace('T', ' ', trim((string) $request->input('fecha_hora', '')));
+        if (strlen($fecha) === 16) {
+            $fecha .= ':00';
+        }
+        $servicios = array_values(array_unique(array_filter(
+            array_map('intval', (array) $request->input('servicios', []))
+        )));
+        $obs = trim((string) $request->input('observaciones', '')) ?: null;
+
+        $error = null;
+        if (! $idCliente || $fecha === '' || ! $servicios) {
+            $error = 'Elegí cliente, al menos un servicio y la fecha/hora.';
+        } elseif (! DB::scalar('SELECT COUNT(*) FROM cliente WHERE id_cliente = ? AND activo = 1', [$idCliente])) {
+            $error = 'Ese cliente no existe o está inactivo.';
+        } elseif ($idUsuario && ! $this->esPersonalActivo($idUsuario)) {
+            $error = 'Ese profesional no está activo.';
+        } elseif (! strtotime($fecha)) {
+            $error = 'La fecha y hora no son válidas.';
+        } elseif (strtotime($fecha) < strtotime('-1 day')) {
+            $error = 'No se pueden agendar citas con más de un día de atraso.';
+        } elseif (strtotime($fecha) > strtotime('+1 year')) {
+            $error = 'No se pueden agendar citas con más de un año de anticipación.';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return redirect()->route('citas.form')->with("sgp_form_error", true)->withInput();
+        }
+
+        // A quién le toca cada servicio: la pantalla manda prof_servicio[id],
+        // y 0 (o nada) significa «quien esté libre».
+        $porServicio = (array) $request->input('prof_servicio', []);
+        $asignacion = [];
+        foreach ($servicios as $sid) {
+            $asignacion[$sid] = (int) ($porServicio[$sid] ?? 0);
+        }
+
+        $dur = Agenda::duracion($servicios);
+        if ($dur <= 0) {
+            flash('Los servicios elegidos no son válidos.', 'error');
+
+            return redirect()->route('citas.form')->with("sgp_form_error", true)->withInput();
+        }
+
+        // Exclusividad + hueco de CADA profesional. Se vuelve a preguntar acá
+        // porque entre que se dibujó la pantalla y se apretó el botón, otro
+        // pudo tomar el horario.
+        // **Cuántas personas van se lee ACÁ y no más abajo.** Es lo que decide
+        // si dos servicios de la misma zona van a la vez o uno después del
+        // otro —dos cabezas son dos cabezas—, así que el reparto y la duración
+        // dependen de él: leyéndolo después, la cita se validaba contra un
+        // tiempo que no era el suyo.
+        // Sin el campo en el POST vale 1, como siempre —lo mandan los guiones de
+        // simulación—; mandado y vacío, o en 0, o en 25, se rechaza.
+        $personasCrudo = trim((string) $request->input('personas', '1'));
+        $personas = (int) $personasCrudo;
+        if (! ctype_digit($personasCrudo) || $personas < 1 || $personas > 20) {
+            flash('¿Cuántas personas van? Tiene que ser un número entre 1 y 20.', 'error');
+
+            // Con la marca, que si no la pantalla vuelve en blanco (7.17.0).
+            return redirect()->route('citas.form', ['cliente' => $idCliente])->with('sgp_form_error', true)->withInput();
+        }
+
+        // **Lo que el asistente exige en «Detalles», el servidor lo vuelve a
+        // exigir**: «van 3» sin los nombres es lo que la 7.97.0 vino a evitar,
+        // y `Acompanantes::guardar()` descarta en silencio al que no lo tiene.
+        // Se pregunta ANTES de agendar, así el horario no queda tomado por
+        // una cita que se va a rechazar.
+        if ($aviso = Acompanantes::avisoFaltantes((array) $request->input('acomp_nombre', []), $personas)) {
+            flash($aviso, 'error');
+
+            return redirect()->route('citas.form', ['cliente' => $idCliente])->with('sgp_form_error', true)->withInput();
+        }
+
+        // **Para quiénes es cada servicio, y por eso cuántas veces va.** Dos
+        // amigas que marcan las dos en «Corte» son dos cortes —dos filas, dos
+        // turnos si los hace la misma persona— y eso cambia cuánto dura la
+        // cita: se fija ANTES de medir, o el reparto y la validación medirían
+        // una cita que no es la que se va a guardar (7.119.0).
+        $personaDe = Acompanantes::personaDe((array) $request->input('para', []), $servicios, $personas);
+        Agenda::vecesPorServicio(Acompanantes::vecesDe($personaDe));
+        $dur = Agenda::duracion($servicios);
+
+        $idSucursal = Sucursales::activa();
+
+        // **Lo que quedó en «quien esté libre» se resuelve con el MISMO criterio
+        // con que la pantalla ofreció la hora.** Antes se buscaba a UNA persona
+        // libre que hiciera TODO lo que quedó sin dueño, por la SUMA de esos
+        // servicios: la pantalla ofrecía una hora con dos profesionales
+        // repartiéndose el trabajo y al guardar el sistema contestaba «no queda
+        // ningún profesional libre» — el genérico que se pidió sacar. Ver
+        // `Agenda::repartoPara()`; si no hay reparto, se explica con nombres.
+        if (in_array(0, $asignacion, true)) {
+            $r = Agenda::repartoPara($servicios, $asignacion, $fecha, $personas, $idSucursal, $idUsuario);
+            if ($r === null) {
+                flash(Agenda::porQueNoHayHora(substr($fecha, 0, 10), $servicios, $personas,
+                        Agenda::pedidosDe($asignacion), $idSucursal)
+                    ?? 'A esa hora no queda ningún profesional libre para lo que elegiste. Elegí otro horario.', 'warning');
+
+                return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+            }
+            $asignacion = $r['reparto'];
+        }
+        if (! $idUsuario) {
+            // **Todos los servicios tienen dueño**: la cita queda a nombre de
+            // quien más trabajo tiene adentro, y no se busca a nadie de afuera
+            // —eso metía a la propietaria en citas en las que no atendía—.
+            $idUsuario = Agenda::principalDelReparto($asignacion);
+        }
+
+        // Un profesional puede hacer todos los servicios, pero no todos los
+        // días. Se comprueba el turno de cada integrante del reparto antes de
+        // llegar al procedimiento, para que el formulario nunca confirme una
+        // cita fuera de su jornada y el mensaje explique qué debe corregirse.
+
+        $aRevisar = array_values(array_unique(array_filter(
+            array_merge([$idUsuario], array_map('intval', array_values($asignacion)))
+        )));
+        foreach ($aRevisar as $idProf) {
+            if (! Agenda::trabajaEseDia($idProf, substr($fecha, 0, 10), $idSucursal)) {
+                $nombreProf = (string) DB::scalar(
+                    'SELECT CONCAT(pe.nombre,\' \',pe.apellido)
+                       FROM usuario u JOIN persona pe ON pe.id_persona = u.id_persona
+                      WHERE u.id_usuario = ?', [$idProf]
+                );
+                flash($nombreProf . ' no trabaja ese día. Elegí otra fecha o profesional.', 'warning');
+
+                return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+            }
+        }
+
+        foreach (array_unique(array_values($asignacion)) as $idAyuda) {
+            if ($idAyuda > 0 && ! $this->esPersonalActivo((int) $idAyuda)) {
+                flash('Uno de los profesionales elegidos ya no está activo.', 'error');
+
+                return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+            }
+        }
+
+        if ($problema = Agenda::validarReparto($asignacion, $idUsuario, $fecha, null, $personas)) {
+            flash($problema, 'warning');
+
+            return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+        }
+
+        // La cita dura el bloque más largo: los profesionales trabajan en
+        // paralelo, no uno detrás del otro.
+        $dur = Agenda::duracionReparto($asignacion, $idUsuario, $personas) ?: $dur;
+
+        // **Para quién es la cita, y cuántas van.** El portal lo pregunta
+        // desde la 7.57.0 y el mostrador no: la clienta que llama para
+        // reservarle a su hija quedaba cargada como si fuera para ella, y el
+        // día de la cita quien atiende esperaba a una y venía otra.
+        //
+        // Se valida acá y no sólo en la pantalla: `personas` entra en la base
+        // con un `CHECK`, y un nombre vacío con la casilla marcada deja una
+        // cita que dice «es para otra persona» sin decir para quién.
+        $paraOtro = (bool) $request->input('para_otra_persona', 0);
+        $nombrePara = trim((string) $request->input('nombre_para', ''));
+
+        if ($paraOtro && mb_strlen($nombrePara) < 3) {
+            flash('Si la cita es para otra persona, escribí su nombre: es lo que ve '
+                . 'quien atiende ese día.', 'error');
+
+            return redirect()->route('citas.form', ['cliente' => $idCliente])->with('sgp_form_error', true)->withInput();
+        }
+
+        try {
+            $idCita = Agenda::agendar($idCliente, $idUsuario, $fecha, $dur, $obs, $asignacion, null, $personaDe, $personas);
+            $equipo = count(array_filter(array_values($asignacion))) > 0;
+
+            // Va aparte del `sp_agendar_cita` por el mismo motivo que en el
+            // portal: el procedimiento es el del TCC y no recibe estos campos.
+            // **Y las alergias de quien se atiende, cuando no es la clienta.**
+            // Esa persona no tiene ficha —su nombre va como texto acá al
+            // lado—, así que su alergia es un dato de esta visita.
+            DB::update(
+                'UPDATE cita SET para_otra_persona = ?, nombre_para = ?, alergias_para = ?, personas = ? WHERE id_cita = ?',
+                [$paraOtro ? 1 : 0, $paraOtro ? mb_substr($nombrePara, 0, 120) : null,
+                    $paraOtro ? Alergias::limpiar($request->input('alergias_para')) : null,
+                    $personas, $idCita]
+            );
+
+            // Quiénes vienen, no sólo cuántas: quien atiende necesita saber a
+            // quién esperar, **y con qué es alérgica cada una**. La primera no
+            // se guarda — es la clienta, y lo suyo va a su ficha.
+            Acompanantes::guardar($idCita,
+                (array) $request->input('acomp_nombre', []),
+                (array) $request->input('acomp_apellido', []),
+                $personas,
+                (array) $request->input('acomp_alergias', []));
+            Alergias::guardarDelTitular($request, $idCliente);
+            Auditoria::registrar('ALTA', 'Citas', 'cita', $idCita,
+                'Cita agendada para ' . $fecha . ($equipo ? ' con varios profesionales' : ''));
+
+            // Los canjes que se marcaron quedan atados a esta cita, y con eso
+            // el servicio va **a cero** en el comprobante. `aplicarACita()`
+            // comprueba contra la clienta de la cita y contra los servicios
+            // que la cita tiene de verdad, así que un canje marcado sin marcar
+            // su servicio no se gasta: se avisa y queda para la próxima.
+            $pedidos = array_unique(array_filter(array_map('intval', (array) $request->input('canjes', []))));
+            $usados = Canje::aplicarACita($pedidos, $idCita, $idCliente);
+            $sobraron = count($pedidos) - $usados;
+
+            flash('Cita agendada para el ' . fecha($fecha) . '.'
+                . ($usados ? ' Se usó ' . $usados . ' canje(s): ese servicio no se cobra.' : '')
+                . ($sobraron > 0
+                    ? ' Ojo: ' . $sobraron . ' canje(s) NO se aplicaron porque su servicio no quedó en la cita. '
+                      . 'La clienta los conserva.'
+                    : ''),
+                $sobraron > 0 ? 'warning' : 'success');
+        } catch (Throwable $ex) {
+            // Si el procedimiento dice «no disponible» acá, es porque otra
+            // persona se quedó con el hueco entre nuestra verificación y el
+            // candado: son milisegundos, pero pasa.
+            $msg = $ex->getMessage();
+
+            // El disparador que impide repetir el mismo servicio el mismo día
+            // ya arma un mensaje pensado para quien atiende —nombra el
+            // servicio y dice qué hacer—, así que se muestra tal cual en vez
+            // de reemplazarlo por uno genérico. Se recorta lo que MariaDB le
+            // pega adelante y atrás (el SQLSTATE y la consulta entera).
+            if (str_contains($msg, 'No se repite el mismo servicio')) {
+                $desde = strpos($msg, 'Esa clienta');
+                $hasta = strpos($msg, 'cancela la otra cita primero.');
+                flash($desde !== false && $hasta !== false
+                    ? substr($msg, $desde, $hasta - $desde + 28)
+                    : 'Esa clienta ya tiene ese servicio agendado para ese mismo día.', 'warning');
+
+                return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+            }
+
+            if (! str_contains($msg, 'disponible') && ! str_contains($msg, 'habilitado')) {
+                Log::error('Agendar cita: ' . $msg);
+            }
+
+            flash(str_contains($msg, 'disponible')
+                ? Agenda::motivoHuecoPerdido($idUsuario, $fecha, $dur)
+                : (str_contains($msg, 'habilitado')
+                    ? 'El profesional no está habilitado para alguno de esos servicios.'
+                    : 'No se pudo agendar la cita. El detalle quedó registrado.'), 'error');
+
+            return redirect()->route('citas.form', ['cliente' => $idCliente])->with("sgp_form_error", true)->withInput();
+        }
+
+        return redirect()->route('citas.agenda', ['dia' => substr($fecha, 0, 10)]);
+    }
+
+    public function estado(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cita', 0);
+        $estado = (int) $request->input('id_estado_cita', 0);
+        $dia = (string) $request->input('dia', date('Y-m-d'));
+        $volver = redirect()->route('citas.agenda', ['dia' => $dia]);
+
+        $cita = DB::selectOne(
+            'SELECT id_cita, id_usuario, id_estado_cita, fecha_hora FROM cita WHERE id_cita = ?', [$id]);
+        if (! $cita) {
+            flash('Esa cita no existe.', 'error');
+
+            return $volver;
+        }
+        if ($this->citaAjena($cita)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+
+        // **Una atención ya registrada no se vuelve a tocar.** La pantalla la
+        // dibuja como detalle, pero esconder los campos no es el control: sin
+        // esto, un POST armado a mano agregaría servicios a una cita cerrada —
+        // y si ya se facturó, la factura queda corta.
+        if ((int) $cita->id_estado_cita === 4) {
+            flash('Esa atención ya está registrada. Si hay que corregirla, anulá el '
+                . 'comprobante o pedíselo a administración.', 'warning');
+
+            return $volver;
+        }
+
+        // **Una cita que todavía falta no se atiende.** Atender antes de hora
+        // no es un adelanto: es registrar como hecho algo que no pasó, y con
+        // eso la comisión, el consumo de stock y el cobro quedan cargados a un
+        // día en que la clienta ni estaba. Un cuarto de hora de margen alcanza
+        // para la que llegó temprano.
+        $faltan = (strtotime((string) $cita->fecha_hora) - strtotime(ahora_bd())) / 60;
+        if ($faltan > self::MINUTOS_ANTES_DE_ATENDER) {
+            flash('Esa cita es a las ' . fecha($cita->fecha_hora, 'H:i') . ' y todavía faltan '
+                . (int) $faltan . ' minutos. Se puede registrar desde '
+                . self::MINUTOS_ANTES_DE_ATENDER . ' minutos antes.', 'warning');
+
+            return $volver;
+        }
+        // **En proceso y Ausente son del DÍA de la cita.** Desde la agenda de
+        // otro día se podían apretar igual, y una cita quedaba «en proceso» un
+        // día en que nadie la está atendiendo — o ausente antes de que le
+        // tocara venir. La pantalla ya no los dibuja; esto es lo que decide,
+        // porque un POST se puede armar a mano.
+        if (in_array($estado, [5, 6], true)
+            && fecha($cita->fecha_hora, 'Y-m-d') !== fecha(ahora_bd(), 'Y-m-d')) {
+            flash('Esa cita es del ' . fecha($cita->fecha_hora, 'd/m/Y')
+                . ': su estado se cambia ese día. Para moverla de día, reprogramala.', 'warning');
+
+            return redirect()->route('citas.agenda', ['dia' => $request->input('dia')]);
+        }
+
+        if (in_array((int) $cita->id_estado_cita, self::CERRADAS, true)) {
+            flash('Esa cita ya está cerrada: no se le puede cambiar el estado.', 'warning');
+
+            return $volver;
+        }
+
+        // **«En proceso» y «Ausente» son de la HORA de la cita, no sólo del
+        // día** (7.127.0, reportado: «en agenda aparecen botones que no
+        // deberían mostrarse antes»). A las 9 de la mañana una cita de las 18
+        // no está en proceso —nadie la está atendiendo— y marcarla ausente
+        // antes de que le toque venir es inventar que faltó. En proceso vale
+        // desde el mismo margen que registrar la atención; ausente, desde que
+        // la hora pasó. La pantalla ya no los dibuja; esto es lo que decide.
+        $faltan = (strtotime((string) $cita->fecha_hora) - strtotime(ahora_bd())) / 60;
+        if ($estado === 5 && $faltan > self::MINUTOS_ANTES_DE_ATENDER) {
+            flash('Esa cita es a las ' . fecha($cita->fecha_hora, 'H:i') . ' y todavía faltan '
+                . (int) $faltan . ' minutos: se pone en proceso desde '
+                . self::MINUTOS_ANTES_DE_ATENDER . ' minutos antes.', 'warning');
+
+            return $volver;
+        }
+        if ($estado === 6 && $faltan > 0) {
+            flash('Esa cita es a las ' . fecha($cita->fecha_hora, 'H:i') . ' y todavía no llegó la hora: '
+                . 'no se puede dar por ausente a quien todavía puede venir. Si avisó que no viene, cancelala.', 'warning');
+
+            return $volver;
+        }
+
+        if ($estado === 5) {
+            $fichaje = $this->estadoFichaje($cita);
+            if (! ($fichaje['ok'] ?? false)) {
+                flash(($fichaje['futura'] ?? false)
+                    ? 'El profesional todavía no puede fichar una cita futura.'
+                    : 'Primero hay que marcar la entrada del profesional en Asistencia. '
+                      . 'Si llegó tarde, puede justificarla y después fichar.', 'warning');
+
+                return $volver;
+            }
+        }
+
+        // El 1 permite deshacer un «Ausente» marcado por error: si no, la cita
+        // quedaba sin ninguna acción posible y había que tocar la base a mano.
+        $nombres = [1 => 'Programada', 5 => 'En proceso', 6 => 'Ausente'];
+        if (! isset($nombres[$estado])) {
+            flash('Estado no válido.', 'error');
+
+            return $volver;
+        }
+
+        DB::update('UPDATE cita SET id_estado_cita = ? WHERE id_cita = ?', [$estado, $id]);
+        Auditoria::registrar('MODIFICACION', 'Citas', 'cita', $id, 'Estado cambiado a ' . $nombres[$estado]);
+        flash('Estado de la cita actualizado.');
+
+        return $volver;
+    }
+
+    public function cancelar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cita', 0);
+        $dia = (string) $request->input('dia', date('Y-m-d'));
+        $volver = redirect()->route('citas.agenda', ['dia' => $dia]);
+
+        $cita = DB::selectOne('SELECT id_usuario, id_estado_cita FROM cita WHERE id_cita = ?', [$id]);
+        if (! $cita) {
+            flash('Esa cita no existe.', 'error');
+
+            return $volver;
+        }
+        if ($this->citaAjena($cita)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+        // **El consumo sale del depósito del local donde se atendió.** Sin
+        // esto se podía descargar stock de otra sucursal armando el POST.
+        if ($this->deOtroLocal($cita)) {
+            flash('Esa cita es de otra sucursal: la atención se registra donde ocurrió.', 'warning');
+
+            return redirect()->route('citas.agenda');
+        }
+        if ((int) $cita->id_estado_cita === 3) {
+            flash('Esa cita ya estaba cancelada.', 'warning');
+
+            return $volver;
+        }
+        if ((int) $cita->id_estado_cita === 4) {
+            flash('No se puede cancelar una cita ya atendida.', 'warning');
+
+            return $volver;
+        }
+
+        try {
+            Agenda::cancelar($id);
+            Auditoria::registrar('CANCELACION', 'Citas', 'cita', $id, 'Cita cancelada');
+            flash('Cita cancelada.');
+        } catch (Throwable) {
+            flash('No se pudo cancelar la cita.', 'error');
+        }
+
+        return $volver;
+    }
+
+    public function reprogramar(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cita', 0);
+        // **El campo lo escribe el selector de disponibilidad**, que siempre lo
+        // llama `fecha_hora` —es el mismo de reservar y el del enlace del
+        // correo—. Se sigue aceptando `nueva_fecha`, que es como se llamaba
+        // cuando el modal pedía la fecha a mano.
+        $nueva = str_replace('T', ' ', trim((string) $request->input('fecha_hora',
+            $request->input('nueva_fecha', ''))));
+        $dia = (string) $request->input('dia', date('Y-m-d'));
+        $volver = redirect()->route('citas.agenda', ['dia' => $dia]);
+
+        $cita = DB::selectOne('SELECT id_usuario, id_estado_cita FROM cita WHERE id_cita = ?', [$id]);
+        if (! $cita) {
+            flash('Esa cita no existe.', 'error');
+
+            return $volver;
+        }
+        if ($this->citaAjena($cita)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+        if (in_array((int) $cita->id_estado_cita, self::CERRADAS, true)) {
+            flash('Solo se pueden reprogramar citas que no estén canceladas ni atendidas.', 'warning');
+
+            return $volver;
+        }
+        if ($nueva === '' || ! strtotime($nueva)) {
+            flash('Elegí la nueva fecha y hora.', 'error');
+
+            return $volver;
+        }
+        if (strtotime($nueva) < strtotime('-1 day')) {
+            flash('No se puede reprogramar a una fecha pasada.', 'error');
+
+            return $volver;
+        }
+
+        try {
+            Agenda::reprogramar($id, $nueva);
+            Auditoria::registrar('MODIFICACION', 'Citas', 'cita', $id, 'Reprogramada para ' . $nueva);
+            flash('Cita reprogramada para el ' . fecha($nueva) . '.');
+        } catch (Throwable $ex) {
+            flash(str_contains($ex->getMessage(), 'disponible')
+                ? 'El profesional no está disponible en el nuevo horario.'
+                : 'No se pudo reprogramar.', 'error');
+
+            return $volver;
+        }
+
+        return redirect()->route('citas.agenda', ['dia' => substr($nueva, 0, 10)]);
+    }
+
+    // -----------------------------------------------------------------
+    //  Alta rápida de cliente, sin salir de Nueva cita
+    // -----------------------------------------------------------------
+
+    public function clienteRapido(Request $request): RedirectResponse
+    {
+        $d = [
+            'nombre' => trim((string) $request->input('nombre', '')),
+            'apellido' => trim((string) $request->input('apellido', '')),
+            'cedula' => trim((string) $request->input('cedula', '')) ?: null,
+            'telefono' => trim((string) $request->input('telefono', '')) ?: null,
+            'email' => trim((string) $request->input('email', '')) ?: null,
+        ];
+        // El formulario de la cita viaja en `_borrador`: registrar un cliente no
+        // puede borrar los servicios y el horario que ya se habían elegido.
+        $volver = Borrador::conservar(redirect()->route('citas.form'), $request, $request->except(['_borrador', '_token']));
+
+        if ($d['nombre'] === '' || $d['apellido'] === '') {
+            flash('Para registrar al cliente necesito al menos nombre y apellido.', 'error');
+
+            return $volver;
+        }
+        if ($d['email'] && ! filter_var($d['email'], FILTER_VALIDATE_EMAIL)) {
+            flash('El email del cliente no tiene un formato válido.', 'error');
+
+            return $volver;
+        }
+        if ($err = Persona::error($d)) {
+            flash($err, 'error');
+
+            return $volver;
+        }
+
+        // Si la cédula ya está cargada puede ser la misma persona registrada
+        // como empleada: en ese caso se le crea la ficha de cliente sobre esa
+        // persona, en vez de duplicarla.
+        $idPersona = Persona::porDocumento($d['cedula']);
+        if ($idPersona && DB::scalar('SELECT COUNT(*) FROM cliente WHERE id_persona = ?', [$idPersona])) {
+            flash('Ya existe un cliente con esa cédula: buscalo en la lista.', 'warning');
+
+            return $volver;
+        }
+
+        try {
+            $idc = DB::transaction(function () use ($idPersona, $d) {
+                $idPersona = Persona::guardar($idPersona, $d);
+                DB::insert('INSERT INTO cliente (id_persona, activo) VALUES (?,1)', [$idPersona]);
+
+                return (int) DB::getPdo()->lastInsertId();
+            });
+            Auditoria::registrar('ALTA', 'Clientes', 'cliente', $idc, 'Alta rápida desde Nueva cita');
+            flash('Cliente ' . $d['nombre'] . ' ' . $d['apellido'] . ' registrado y seleccionado.');
+
+            return Borrador::conservar(redirect()->route('citas.form', ['cliente' => $idc]), $request);
+        } catch (Throwable) {
+            flash('No se pudo registrar al cliente.', 'error');
+
+            return $volver;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    //  Excepciones de agenda (feriados, licencias, bloqueos)
+    // -----------------------------------------------------------------
+
+    /**
+     * Pasarle a otro profesional las citas futuras de alguien (AG-03).
+     *
+     * Sin esto, dar de baja a una persona —o cargarle una licencia larga—
+     * dejaba sus citas **ocupando la agenda igual**, y había que abrirlas de a
+     * una para cambiarles el profesional. El aviso a las clientas sí salía,
+     * pero el horario seguía reservado a nombre de alguien que no iba a estar.
+     */
+    public function reasignar(Request $request): View
+    {
+        $de = (int) $request->query('de', 0);
+
+        // **Se muestran también las de quien está inactivo**, que es el caso
+        // que motiva la pantalla: `Agenda::profesionales()` ya no lo devuelve.
+        $origen = $de ? DB::selectOne(
+            "SELECT u.id_usuario, CONCAT(pe.nombre,' ',pe.apellido) AS nombre, u.activo
+               FROM usuario u JOIN persona pe ON pe.id_persona = u.id_persona
+              WHERE u.id_usuario = ?", [$de]
+        ) : null;
+
+        return view('citas.reasignar', [
+            'de' => $de,
+            'origen' => $origen,
+            // Quién tiene citas futuras: el selector de origen sale de acá y no
+            // de la lista de profesionales, justamente para que aparezca quien
+            // ya está dado de baja.
+            // OJO con `ONLY_FULL_GROUP_BY`, que está activo: todo lo que va en
+            // el SELECT y no es agregado tiene que estar en el GROUP BY, con la
+            // MISMA expresión. Agrupar sólo por `u.id_usuario` da error 1055 —
+            // y no se ve leyendo el código, se ve al abrir la pantalla.
+            'conCitas' => DB::select(
+                "SELECT u.id_usuario, CONCAT(pe.nombre,' ',pe.apellido) AS nombre, u.activo,
+                        COUNT(*) AS pendientes
+                   FROM cita c
+                   JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+                   JOIN usuario u  ON u.id_usuario = c.id_usuario
+                   JOIN persona pe ON pe.id_persona = u.id_persona
+                  WHERE ec.bloquea_agenda = 1 AND c.fecha_hora >= NOW()
+                  GROUP BY u.id_usuario, pe.nombre, pe.apellido, u.activo
+                  ORDER BY u.activo, pe.nombre"
+            ),
+            'citas' => $de ? DB::select(
+                "SELECT c.id_cita, c.fecha_hora, fn_cita_duracion(c.id_cita) AS dur,
+                        CONCAT(pe_cl.nombre,' ',pe_cl.apellido) AS cliente,
+                        (SELECT GROUP_CONCAT(s.nombre SEPARATOR ', ') FROM cita_servicio cs
+                          JOIN servicio s ON s.id_servicio = cs.id_servicio
+                         WHERE cs.id_cita = c.id_cita) AS servicios
+                   FROM cita c
+                   JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+                   JOIN cliente cl ON cl.id_cliente = c.id_cliente
+                   JOIN persona pe_cl ON pe_cl.id_persona = cl.id_persona
+                  WHERE c.id_usuario = ? AND ec.bloquea_agenda = 1 AND c.fecha_hora >= NOW()
+                  ORDER BY c.fecha_hora", [$de]
+            ) : [],
+            'profs' => Agenda::profesionales(),
+        ]);
+    }
+
+    public function reasignarGuardar(Request $request): RedirectResponse
+    {
+        $de = (int) $request->input('de', 0);
+        $a = (int) $request->input('a', 0);
+        $elegidas = array_values(array_unique(array_filter(
+            array_map('intval', (array) $request->input('citas', []))
+        )));
+        $volver = redirect()->route('citas.reasignar', ['de' => $de]);
+
+        if (! $a || ! $this->esPersonalActivo($a)) {
+            flash('Elegí a quién le pasás las citas.', 'error');
+
+            return $volver;
+        }
+        if ($a === $de) {
+            flash('Esa es la misma persona: elegí otra.', 'error');
+
+            return $volver;
+        }
+        if (! $elegidas) {
+            flash('No marcaste ninguna cita.', 'warning');
+
+            return $volver;
+        }
+
+        $nombre = (string) DB::scalar(
+            "SELECT CONCAT(pe.nombre,' ',pe.apellido) FROM usuario u
+               JOIN persona pe ON pe.id_persona = u.id_persona WHERE u.id_usuario = ?", [$a]
+        );
+
+        // **Una por una, y las que no entran se dicen por su nombre.** Mover en
+        // bloque sin mirar la disponibilidad sería vender dos veces el mismo
+        // horario del que las recibe.
+        $movidas = 0;
+        $ocupadas = [];
+        // **Las que no puede hacer se cuentan aparte**, porque no es lo mismo:
+        // «no está libre» se arregla cambiando el horario y «no hace ese
+        // servicio» no se arregla nunca con esa persona. Metidas en la misma
+        // bolsa, quien reasigna busca un hueco que no es el problema.
+        $noSabe = [];
+        foreach ($elegidas as $idCita) {
+            $suya = (int) DB::scalar(
+                'SELECT COUNT(*) FROM cita c JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+                  WHERE c.id_cita = ? AND c.id_usuario = ? AND ec.bloquea_agenda = 1 AND c.fecha_hora >= NOW()',
+                [$idCita, $de]
+            );
+            if (! $suya) {
+                continue;   // un id inventado en el POST no hace nada
+            }
+
+            $noHace = Agenda::serviciosQueNoHace($idCita, $a);
+            if ($noHace) {
+                $noSabe = array_unique(array_merge($noSabe, $noHace));
+
+                continue;
+            }
+
+            try {
+                if (Agenda::reasignar($idCita, $a)) {
+                    $movidas++;
+                    Auditoria::registrar('MODIFICACION', 'Citas', 'cita', $idCita,
+                        'Cita reasignada a ' . $nombre);
+
+                    continue;
+                }
+            } catch (Throwable $ex) {
+                Log::error('No se pudo reasignar la cita ' . $idCita, ['error' => $ex->getMessage()]);
+            }
+
+            $cuando = DB::scalar('SELECT fecha_hora FROM cita WHERE id_cita = ?', [$idCita]);
+            $ocupadas[] = fecha($cuando, 'd/m H:i');
+        }
+
+        if ($movidas) {
+            flash($movidas . ' cita(s) pasaron a ' . $nombre . '. El horario no cambió, '
+                . 'así que la clienta no tiene que hacer nada.');
+        }
+        if ($noSabe) {
+            flash($nombre . ' no hace ' . implode(', ', $noSabe)
+                . ', así que esas citas quedaron como estaban. Elegí a alguien que sí lo haga.', 'warning');
+        }
+        if ($ocupadas) {
+            flash($nombre . ' no está libre en ' . count($ocupadas) . ' de esos horarios ('
+                . implode(', ', array_slice($ocupadas, 0, 6))
+                . (count($ocupadas) > 6 ? '…' : '')
+                . '). Esas quedan como estaban: pasalas a otra persona o reprogramalas.', 'warning');
+        }
+
+        return $volver;
+    }
+
+    /** Reasigna una cita puntual desde la agenda cuando su profesional falta. */
+    public function reasignarUna(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_cita', 0);
+        $a = (int) $request->input('a', 0);
+        $dia = (string) $request->input('dia', ahora_bd('Y-m-d'));
+        $motivo = trim((string) $request->input('motivo', ''));
+        $volver = redirect()->route('citas.agenda', ['dia' => $dia]);
+
+        // **Cambiar el profesional de una cita es administración, no mostrador.**
+        // La clienta eligió a alguien, muchas veces por algo; cambiárselo es una
+        // decisión del salón, y quien atiende no debería poder moverse citas
+        // entre sí. Lo tienen el Administrador y quien administre los turnos,
+        // que son los dos que saben quién trabaja cuándo.
+        if (! Permisos::esAdmin() && ! Permisos::puede('personal.turnos')) {
+            flash('Sólo administración puede cambiar el profesional de una cita.', 'error');
+
+            return $volver;
+        }
+
+        // **Con motivo, y que explique algo.** Es lo que se le manda a la
+        // clienta por correo y lo único que queda en la auditoría: «cambio» no
+        // le dice nada a nadie tres meses después.
+        if (mb_strlen($motivo) < 10) {
+            flash('Escribí por qué se cambia el profesional, con al menos 10 caracteres: '
+                . 'es lo que se le avisa a la clienta.', 'error');
+
+            return $volver;
+        }
+
+        $cita = DB::selectOne(
+            'SELECT id_cita, id_usuario, id_estado_cita, fecha_hora
+               FROM cita WHERE id_cita = ?', [$id]
+        );
+        if (! $cita) {
+            flash('Esa cita no existe.', 'error');
+
+            return $volver;
+        }
+        if (! $a || ! $this->esPersonalActivo($a)) {
+            flash('Elegí un profesional activo.', 'error');
+
+            return $volver;
+        }
+        if ($a === (int) $cita->id_usuario) {
+            flash('Elegí un profesional distinto al actual.', 'warning');
+
+            return $volver;
+        }
+        if (in_array((int) $cita->id_estado_cita, [3, 4, 6], true)) {
+            flash('Solo se puede cambiar el profesional de una cita abierta.', 'warning');
+
+            return $volver;
+        }
+        if ((string) $cita->fecha_hora < ahora_bd()) {
+            flash('La cita ya empezó o quedó atrás; no se puede reasignar desde la agenda.', 'warning');
+
+            return $volver;
+        }
+
+        // **Que haga los servicios de la cita.** Se comprueba ACÁ y no sólo
+        // dentro de `Agenda::reasignar()` para poder decir cuál es el que traba:
+        // el procedimiento sólo puede contestar que no, y con eso quien reasigna
+        // queda probando profesional por profesional. Nombrarlo deja elegir a
+        // otra persona o repartir la cita.
+        $noHace = Agenda::serviciosQueNoHace($id, $a);
+        if ($noHace) {
+            flash('Esa persona no hace ' . implode(', ', $noHace)
+                . '. Elegí a alguien que sí lo haga, o repartí la cita desde «Editar».', 'warning');
+
+            return $volver;
+        }
+
+        try {
+            if (! Agenda::reasignar($id, $a)) {
+                flash('Ese profesional no queda libre en el horario de la cita.', 'warning');
+
+                return $volver;
+            }
+            $nombre = (string) DB::scalar(
+                'SELECT CONCAT(pe.nombre,\' \',pe.apellido)
+                   FROM usuario u JOIN persona pe ON pe.id_persona = u.id_persona
+                  WHERE u.id_usuario = ?', [$a]
+            );
+            Auditoria::registrar('MODIFICACION', 'Citas', 'cita', $id,
+                'Profesional cambiado por administración a ' . $nombre . ': ' . $motivo);
+
+            // **A la clienta hay que avisarle.** Va a venir esperando a alguien
+            // y la atiende otra persona: enterarse en el sillón es la peor
+            // forma. El aviso va DESPUÉS del cambio y no atado a él — si el
+            // correo falla, la cita ya está reasignada y el salón puede llamar.
+            $aviso = Notificaciones::avisarCambioDeProfesional($id, $nombre, $motivo);
+
+            flash('La cita pasó a ' . $nombre . '. El horario se mantuvo.'
+                . ($aviso ? ' Se le avisó a la clienta por correo.'
+                          : ' No se le pudo avisar por correo: no tiene dirección cargada.'));
+        } catch (QueryException $ex) {
+            Log::error('No se pudo reasignar la cita ' . $id, ['error' => $ex->getMessage()]);
+            flash('Ese profesional no está disponible en ese horario.', 'warning');
+        } catch (Throwable $ex) {
+            Log::error('No se pudo reasignar la cita ' . $id, ['error' => $ex->getMessage()]);
+            flash('No se pudo cambiar el profesional de la cita.', 'error');
+        }
+
+        return $volver;
+    }
+
+    public function ausencias(): View
+    {
+        return view('citas.ausencias', [
+            'rows' => DB::select(
+                "SELECT a.*, ta.nombre AS tipo,
+                        COALESCE(CONCAT(pe_u.nombre,' ',pe_u.apellido),'Todo el salón') AS quien,
+                        COALESCE(su.nombre,'Todas las sucursales') AS donde,
+                        -- **Todavía no empezó**, o sea que se puede corregir entera.
+                        -- Lo decide la base y no PHP por la regla de siempre: la hora
+                        -- del reloj sale de la conexión, nunca de `date()`.
+                        (a.fecha_inicio > NOW()) AS editable
+                   FROM ausencia_agenda a
+                   JOIN tipo_ausencia ta ON ta.id_tipo_ausencia = a.id_tipo_ausencia
+                   LEFT JOIN usuario u   ON u.id_usuario = a.id_usuario
+                   LEFT JOIN persona pe_u ON pe_u.id_persona = u.id_persona
+                   LEFT JOIN sucursal su  ON su.id_sucursal = a.id_sucursal
+                  WHERE (:s = 0 OR a.id_sucursal IS NULL OR a.id_sucursal = :s2)
+                  ORDER BY a.activo DESC, a.fecha_inicio DESC LIMIT 100",
+                ['s' => Sucursales::activa(), 's2' => Sucursales::activa()]
+            ),
+            'profs' => Agenda::profesionales(),
+            'sucursales' => DB::select('SELECT id_sucursal, nombre FROM sucursal WHERE activo = 1 ORDER BY nombre'),
+            'tipos' => DB::select('SELECT * FROM tipo_ausencia ORDER BY nombre'),
+        ]);
+    }
+
+    /**
+     * Dar de baja una excepción de agenda, o volver a ponerla.
+     *
+     * **Se cargaban y no se podían sacar.** Una licencia mal tipeada —el mes
+     * equivocado, la persona equivocada— dejaba a alguien sin agenda y la
+     * única salida era cargar otra encima, que no borra la primera:
+     * `fn_verificar_disponibilidad` mira TODAS las vigentes, así que la mala
+     * seguía bloqueando el horario.
+     *
+     * **Es una baja y no un borrado**, con `activo`, que la tabla ya tenía:
+     * una ausencia explica por qué esa semana no se agendó nada, y borrarla
+     * deja ese hueco sin motivo. Además así se puede deshacer.
+     *
+     * **Y la fila NO desaparece de la lista.** Un botón que hace desaparecer
+     * la fila que toca es indistinguible de uno que borra, y desde ahí no hay
+     * cómo volver atrás — es el patrón que este proyecto ya tiene anotado
+     * («que el filtro sea una columna»). La lista muestra las dos, con su
+     * estado, y las vigentes primero.
+     */
+    public function ausenciaBaja(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_ausencia', 0);
+        $volver = redirect()->route('citas.ausencias');
+
+        $a = DB::selectOne(
+            "SELECT a.*, ta.nombre AS tipo,
+                    COALESCE(CONCAT(pe.nombre,' ',pe.apellido),'todo el salón') AS quien
+               FROM ausencia_agenda a
+               JOIN tipo_ausencia ta ON ta.id_tipo_ausencia = a.id_tipo_ausencia
+               LEFT JOIN usuario u  ON u.id_usuario = a.id_usuario
+               LEFT JOIN persona pe ON pe.id_persona = u.id_persona
+              WHERE a.id_ausencia = ?", [$id]
+        );
+        if (! $a) {
+            flash('Esa excepción no existe.', 'error');
+
+            return $volver;
+        }
+
+        // **La sucursal manda, como en toda la operación.** Una excepción de
+        // otro local no se toca desde acá; la que vale en todas (`id_sucursal`
+        // en NULL) sí, que es del salón entero.
+        $suc = (int) (Sucursales::activa() ?: 0);
+        if ($suc && $a->id_sucursal !== null && (int) $a->id_sucursal !== $suc) {
+            flash('Esa excepción es de otra sucursal: se da de baja desde ese local.', 'error');
+
+            return $volver;
+        }
+
+        $nuevo = (int) $a->activo === 1 ? 0 : 1;
+        DB::update('UPDATE ausencia_agenda SET activo = ? WHERE id_ausencia = ?', [$nuevo, $id]);
+
+        Auditoria::registrar($nuevo ? 'ALTA' : 'BAJA', 'Citas', 'ausencia_agenda', $id,
+            $a->tipo . ' de ' . $a->quien . ' (' . fecha($a->fecha_inicio) . ' – ' . fecha($a->fecha_fin) . ')'
+            . ($nuevo ? ' vuelve a valer' : ' dada de baja'));
+
+        flash($nuevo
+            ? 'La excepción vuelve a valer: esos horarios dejan de ofrecerse otra vez.'
+            : 'Excepción dada de baja. Esos horarios vuelven a estar disponibles para agendar.'
+              . ' Las citas que ya se hubieran movido por esto NO se deshacen solas.');
+
+        return $volver;
+    }
+
+    /**
+     * Alta y edición de una excepción de agenda.
+     *
+     * **Es un solo método para las dos cosas, a propósito.** Los campos, las
+     * validaciones y el aviso a las clientas son idénticos: escritos dos veces
+     * se desfasan, que es un error que este proyecto ya se hizo varias veces.
+     * Lo que cambia es una línea —`INSERT` o `UPDATE`— y a quién se audita.
+     *
+     * **Editar sólo vale mientras la excepción no haya empezado.** Una vez que
+     * arrancó dejó de ser un plan: la agenda ya no ofreció esos horarios,
+     * puede haber clientas avisadas y citas movidas por ella, y cambiarle el
+     * rango hacia atrás no deshace nada de eso — deja la fila diciendo algo
+     * que no fue lo que pasó. Para eso está la baja, que corta de acá en
+     * adelante y lo dice.
+     */
+    public function ausenciaGuardar(Request $request): RedirectResponse
+    {
+        $d = [
+            'id_usuario' => ((int) $request->input('id_usuario', 0)) ?: null,
+            // **Quien la registra indica el local.** Vacio = en todas, que es
+            // como se sigue cargando un feriado del salon; una sucursal, solo
+            // ahi. Antes no se preguntaba y toda ausencia valia en todas.
+            'id_sucursal' => ((int) $request->input('id_sucursal', 0)) ?: null,
+            'id_tipo_ausencia' => (int) $request->input('id_tipo_ausencia', 0),
+            'fecha_inicio' => str_replace('T', ' ', trim((string) $request->input('fecha_inicio', ''))),
+            'fecha_fin' => str_replace('T', ' ', trim((string) $request->input('fecha_fin', ''))),
+            'motivo' => trim((string) $request->input('motivo', '')) ?: null,
+        ];
+        $volver = redirect()->route('citas.ausencias');
+
+        // **Qué se está haciendo, y si se puede.** La pantalla esconde el botón
+        // de editar cuando la excepción ya empezó; esto es el control de
+        // verdad, porque el id viaja en el formulario.
+        $id = (int) $request->input('id_ausencia', 0);
+        $previa = null;
+        if ($id > 0) {
+            $previa = DB::selectOne(
+                'SELECT a.*, (a.fecha_inicio > NOW()) AS editable FROM ausencia_agenda a WHERE a.id_ausencia = ?', [$id]);
+
+            if (! $previa) {
+                flash('Esa excepción no existe.', 'error');
+
+                return $volver;
+            }
+            if (! $previa->activo) {
+                flash('Esa excepción está dada de baja. Volvé a aplicarla y después editala.', 'error');
+
+                return $volver;
+            }
+            if (! $previa->editable) {
+                flash('Esa excepción ya empezó, así que no se puede editar: la agenda dejó de ofrecer esos '
+                    . 'horarios y puede haber clientas avisadas. Dala de baja si ya no corresponde.', 'error');
+
+                return $volver;
+            }
+        }
+
+        $error = null;
+        if (! $d['id_tipo_ausencia'] || ! $d['fecha_inicio'] || ! $d['fecha_fin']) {
+            $error = 'Completá el tipo y el rango de fechas.';
+        } elseif (! DB::scalar('SELECT COUNT(*) FROM tipo_ausencia WHERE id_tipo_ausencia = ?', [$d['id_tipo_ausencia']])) {
+            $error = 'Elegí un tipo de excepción válido.';
+        } elseif ($d['id_usuario'] && ! $this->esPersonalActivo((int) $d['id_usuario'])) {
+            $error = 'Ese profesional no está activo.';
+        } elseif ($d['id_sucursal'] && ! DB::scalar(
+            'SELECT COUNT(*) FROM sucursal WHERE id_sucursal = ? AND activo = 1', [$d['id_sucursal']])) {
+            $error = 'Esa sucursal no está disponible.';
+        } elseif (! strtotime($d['fecha_inicio']) || ! strtotime($d['fecha_fin'])) {
+            $error = 'Las fechas no son válidas.';
+        } elseif (strtotime($d['fecha_fin']) <= strtotime($d['fecha_inicio'])) {
+            $error = 'La fecha de fin tiene que ser posterior a la de inicio.';
+        }
+        if ($error) {
+            flash($error, 'error');
+
+            return $volver->with("sgp_form_error", true)->withInput();
+        }
+
+        // Avisar si el bloqueo pisa citas ya agendadas
+        $choques = (int) DB::scalar(
+            'SELECT COUNT(*) FROM cita c JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+              WHERE ec.bloquea_agenda = 1
+                AND (:u1 IS NULL OR c.id_usuario = :u2)
+                AND (:s1 IS NULL OR c.id_sucursal = :s2)
+                AND c.fecha_hora < :fin AND c.fecha_hora >= :ini',
+            ['u1' => $d['id_usuario'], 'u2' => $d['id_usuario'],
+             's1' => $d['id_sucursal'], 's2' => $d['id_sucursal'],
+             'ini' => $d['fecha_inicio'], 'fin' => $d['fecha_fin']]
+        );
+
+        try {
+            if ($previa) {
+                DB::update(
+                    'UPDATE ausencia_agenda
+                        SET id_usuario = :id_usuario, id_sucursal = :id_sucursal,
+                            id_tipo_ausencia = :id_tipo_ausencia, fecha_inicio = :fecha_inicio,
+                            fecha_fin = :fecha_fin, motivo = :motivo
+                      WHERE id_ausencia = :id', $d + ['id' => $id]
+                );
+                // **De cuánto a cuánto**, como en el cambio de precio: el detalle
+                // que sirve dentro de tres meses es qué decía antes, no que se
+                // editó.
+                Auditoria::registrar('MODIFICACION', 'Citas', 'ausencia_agenda', $id,
+                    'Excepción: de ' . $previa->fecha_inicio . '–' . $previa->fecha_fin
+                    . ' a ' . $d['fecha_inicio'] . '–' . $d['fecha_fin']);
+            } else {
+                DB::insert(
+                    'INSERT INTO ausencia_agenda (id_usuario,id_sucursal,id_tipo_ausencia,fecha_inicio,fecha_fin,motivo)
+                     VALUES (:id_usuario,:id_sucursal,:id_tipo_ausencia,:fecha_inicio,:fecha_fin,:motivo)', $d
+                );
+                Auditoria::registrar('ALTA', 'Citas', 'ausencia_agenda', (int) DB::getPdo()->lastInsertId(),
+                    'Excepción ' . $d['fecha_inicio'] . ' a ' . $d['fecha_fin']);
+            }
+
+            // A cada clienta que tenía cita en ese rango se le avisa, con el
+            // enlace del correo para reprogramar o cambiar de profesional. El
+            // aviso entra en la cola de `notificacion` y lo despacha el cron:
+            // avisar acá mismo dejaría la pantalla esperando al servidor SMTP.
+            $avisadas = Notificaciones::avisarProfesionalNoDisponible(
+                $d['id_usuario'], $d['fecha_inicio'], $d['fecha_fin'],
+                (string) ($d['motivo'] ?? '')
+            );
+
+            flash(($previa ? 'Excepción actualizada.' : 'Excepción registrada.')
+                . ($choques ? " Hay $choques cita(s) agendada(s) dentro de ese rango." : '')
+                . ($avisadas ? " Se le avisó a $avisadas clienta(s) para que reprogramen." : ''),
+                $choques ? 'warning' : 'success');
+        } catch (Throwable) {
+            flash('No se pudo guardar la excepción. Revisá que las fechas sean válidas y que el rango '
+                . 'no esté ya cargado; si sigue igual, el detalle quedó en el registro del sistema.', 'error');
+        }
+
+        return $volver;
+    }
+
+    // -----------------------------------------------------------------
+    //  Registrar la atención
+    //
+    //  Acá se anota qué servicios se hicieron y qué productos se gastaron. El
+    //  consumo descuenta el stock solo, por el disparador de la base.
+    // -----------------------------------------------------------------
+
+    public function atender(Request $request): View|RedirectResponse
+    {
+        $id = (int) $request->query('id', 0);
+
+        $cita = DB::selectOne(
+            "SELECT c.*, ec.nombre AS estado,
+                    CONCAT(pe_cl.nombre,' ',pe_cl.apellido) AS cliente,
+                    CONCAT(pe_u.nombre,' ',pe_u.apellido) AS profesional
+               FROM cita c
+               JOIN cliente cl    ON cl.id_cliente = c.id_cliente
+               JOIN persona pe_cl ON pe_cl.id_persona = cl.id_persona
+               JOIN usuario u     ON u.id_usuario = c.id_usuario
+               JOIN persona pe_u  ON pe_u.id_persona = u.id_persona
+               JOIN estado_cita ec ON ec.id_estado_cita = c.id_estado_cita
+              WHERE c.id_cita = ?", [$id]
+        );
+        if (! $cita) {
+            flash('Cita no encontrada.', 'error');
+
+            return redirect()->route('citas.agenda');
+        }
+        if ($this->citaAjena($cita)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+        if ($this->deOtroLocal($cita)) {
+            flash('Esa cita es de otra sucursal: la atención se registra donde ocurrió. '
+                . 'Cambiá de local desde Mi cuenta.', 'warning');
+
+            return redirect()->route('citas.agenda');
+        }
+
+        // **Una cita ya atendida se MIRA, no se edita.** El botón de la agenda
+        // dice «Detalle», pero abría la misma pantalla de registrar: se podían
+        // marcar servicios nuevos y cargar productos sobre una atención que ya
+        // terminó, y encima ofrecía el catálogo entero — quince servicios que
+        // esa clienta no recibió.
+        //
+        // Ya existía el candado por factura emitida, que es más tarde: entre
+        // atender y facturar quedaba una ventana abierta.
+        $soloLectura = (int) $cita->id_estado_cita === 4;
+
+        // **Cada profesional cierra SU parte, no la cita entera.** Una cita de
+        // dos horas repartida entre dos dejaba ocupadas a las dos las dos
+        // horas: la que hace la manicura termina en diez minutos y seguía
+        // apareciendo ocupada, porque «atendida» era un estado de la CITA.
+        //
+        // Quién puede cerrar qué:
+        //
+        //   · el Administrador y el Asistente cierran **la parte de cualquiera**,
+        //     por separado — es lo que se pidió, y es lo que hace falta cuando
+        //     la profesional se fue sin registrar lo suyo;
+        //   · una profesional cierra **sólo lo suyo**.
+        //
+        // Lo hace cumplir el guardado; acá se calcula para poder dibujarlo.
+        $puedeTodo = $this->veTodaLaAgenda();
+        $mias = array_map('intval', array_column(DB::select(
+            'SELECT cs.id_servicio
+               FROM cita_servicio cs
+               JOIN cita c ON c.id_cita = cs.id_cita
+              WHERE cs.id_cita = :c
+                AND (:todo = 1 OR COALESCE(cs.id_usuario, c.id_usuario) = :yo)',
+            ['c' => $id, 'todo' => $puedeTodo ? 1 : 0, 'yo' => (int) session('uid')]
+        ), 'id_servicio'));
+
+        // Quiénes tienen todavía algo abierto en esta cita: es entre ellas que
+        // elige el Administrador para cerrar una parte sin tocar las demás.
+        $abiertasDe = $puedeTodo ? DB::select(
+            "SELECT DISTINCT u.id_usuario, CONCAT(pe.nombre,' ',pe.apellido) AS nombre
+               FROM cita_servicio cs
+               JOIN cita c ON c.id_cita = cs.id_cita
+               JOIN usuario u ON u.id_usuario = COALESCE(cs.id_usuario, c.id_usuario)
+               JOIN persona pe ON pe.id_persona = u.id_persona
+              WHERE cs.id_cita = ? AND cs.terminado_en IS NULL
+              ORDER BY pe.nombre", [$id]) : [];
+
+        return view('citas.atender', [
+            'puedeTodo' => $puedeTodo,
+            'mias' => $mias,
+            'abiertasDe' => $abiertasDe,
+            // Lo que falta cerrar de la cita entera: la factura recién se puede
+            // emitir cuando no queda ninguna parte abierta (decisión del
+            // usuario), así que la pantalla lo tiene que decir.
+            'faltanCerrar' => (int) DB::scalar(
+                'SELECT COUNT(*) FROM cita_servicio WHERE id_cita = ? AND terminado_en IS NULL', [$id]),
+            'cita' => $cita,
+            'soloLectura' => $soloLectura,
+            // Quién puede atender: un servicio agregado en el sillón lo puede
+            // hacer otra persona, y sin esto quedaba a nombre del profesional
+            // de la cita — la comisión se le atribuía a quien no lo hizo.
+            'profs' => Agenda::profesionales(Sucursales::activa() ?: null),
+            // Para avisar ANTES de que cargue todo y le rebote al guardar.
+            'fichaje' => $this->estadoFichaje($cita),
+            // Todos los servicios activos: los agendados vienen marcados y el
+            // resto se puede sumar sobre la marcha si la clienta pide algo más.
+            // Con la cita cerrada se listan SÓLO los que se realizaron: el
+            // catálogo entero en una pantalla de consulta es ruido, y además
+            // invita a marcar algo sobre una atención terminada.
+            'servicios' => DB::select(
+                ($soloLectura ? 'SELECT * FROM (' : '') .
+                'SELECT s.id_servicio, s.nombre, s.precio, cs.nombre AS categoria,
+                        (SELECT COUNT(*) FROM cita_servicio x
+                          WHERE x.id_cita = :c1 AND x.id_servicio = s.id_servicio) AS agendado,
+                        (SELECT COUNT(*) FROM servicio_realizado sr
+                          WHERE sr.id_cita = :c2 AND sr.id_servicio = s.id_servicio) AS ya,
+                        -- Quién lo tiene asignado hoy: el reparto de la cita
+                        -- manda sobre el profesional de la cabecera (AG-02).
+                        (SELECT x2.id_usuario FROM cita_servicio x2
+                          WHERE x2.id_cita = :c5 AND x2.id_servicio = s.id_servicio LIMIT 1) AS id_usuario,
+                        -- Cuándo se cerró esa parte. NULL es «todavía no».
+                        (SELECT x3.terminado_en FROM cita_servicio x3
+                          WHERE x3.id_cita = :c6 AND x3.id_servicio = s.id_servicio LIMIT 1) AS terminado_en,
+                        -- **¿Lo hace quien está atendiendo?** La lista de «se
+                        -- agrega en el sillón» ofrecía el catálogo entero, así
+                        -- que una peluquera veía quince servicios para elegir y
+                        -- entre ellos los que no hace — y agregando uno la
+                        -- comisión le quedaba a ella. Es la misma autoridad del
+                        -- reparto (`fn_usuario_hace_servicio`), con su criterio
+                        -- permisivo: quien no tiene ninguno cargado los hace
+                        -- todos, así que un salón que no administre esto sigue
+                        -- viendo la lista igual que antes.
+                        fn_usuario_hace_servicio(:yo, s.id_servicio) AS hace
+                   FROM servicio s
+                   JOIN categoria_servicio cs ON cs.id_categoria_servicio = s.id_categoria_servicio
+                  WHERE s.activo = 1 ORDER BY cs.nombre, s.nombre'
+                . ($soloLectura ? ') t WHERE t.ya > 0' : ''),
+                ['c1' => $id, 'c2' => $id, 'c5' => $id, 'c6' => $id, 'yo' => (int) session('uid')]
+            ),
+            // **A qué servicio se le imputa el producto: sólo a los de ESTA
+            // cita, y sólo a los que se reservaron CON quien está cerrando.**
+            // El selector ofrecía el catálogo entero, así que se podía cargar
+            // el shampoo «en Pedicura» cuando la clienta no pidió pedicura — y
+            // ahí el consumo queda colgado de un servicio que no existe en la
+            // cita. Después listaba todos los de la cita, y se reportó que
+            // mostraba «los servicios que el profesional puede hacer de los que
+            // hay en la cita, pero sólo debe mostrar los servicios con los que
+            // se reservó para ese profesional» (7.119.0): quien cierra su parte
+            // imputa lo que usó en LO SUYO — el shampoo de la coloración de la
+            // otra no es suyo. El Administrador ve los de todas, cada grupo con
+            // de quién es (`de`), y la pantalla los acota al elegir de quién
+            // cierra. Son los que pidió más los que ya se registraron: los dos
+            // son servicios reales de esta atención.
+            'servDeLaCita' => self::sinRepetir(DB::select(
+                'SELECT s.id_servicio, s.nombre, COALESCE(cs.id_usuario, c.id_usuario) AS de
+                   FROM cita_servicio cs
+                   JOIN cita c ON c.id_cita = cs.id_cita
+                   JOIN servicio s ON s.id_servicio = cs.id_servicio
+                  WHERE cs.id_cita = :c3 AND (:t1 = 1 OR COALESCE(cs.id_usuario, c.id_usuario) = :y1)
+                 UNION
+                 SELECT s.id_servicio, s.nombre, sr.id_usuario AS de
+                   FROM servicio_realizado sr
+                   JOIN servicio s ON s.id_servicio = sr.id_servicio
+                  WHERE sr.id_cita = :c4 AND (:t2 = 1 OR sr.id_usuario = :y2)
+                  ORDER BY nombre',
+                ['c3' => $id, 't1' => $puedeTodo ? 1 : 0, 'y1' => (int) session('uid'),
+                 'c4' => $id, 't2' => $puedeTodo ? 1 : 0, 'y2' => (int) session('uid')]
+            ), 'id_servicio'),
+            'productos' => DB::select(
+                'SELECT p.id_producto, p.nombre, p.unidad_medida, p.contenido, p.unidad_consumo,
+                        fn_producto_stock(p.id_producto, ps.id_sucursal) AS stock
+                   FROM producto p
+                   JOIN producto_sucursal ps ON ps.id_producto = p.id_producto AND ps.id_sucursal = ?
+                  WHERE p.activo = 1 AND ps.activo = 1 ORDER BY p.nombre',
+                [Sucursales::activa() ?: 1]
+            ),
+            'usados' => DB::select(
+                'SELECT p.nombre, pu.cantidad, p.unidad_medida, p.contenido, p.unidad_consumo,
+                        s.nombre AS servicio
+                   FROM producto_utilizado pu
+                   JOIN producto p ON p.id_producto = pu.id_producto
+                   JOIN servicio_realizado sr ON sr.id_servicio_realizado = pu.id_servicio_realizado
+                   JOIN servicio s ON s.id_servicio = sr.id_servicio
+                  WHERE sr.id_cita = ? ORDER BY s.nombre, p.nombre', [$id]
+            ),
+            // Si ya se facturó no se puede seguir agregando: la factura quedaría corta
+            'factura' => DB::selectOne(
+                'SELECT id_factura, fn_factura_nro(id_factura) AS nro FROM factura
+                  WHERE id_cita = ? AND id_estado_factura = 1 LIMIT 1', [$id]
+            ),
+            // Lo que la clienta pidió desde su celular mientras la atienden
+            'pedidos' => DB::select(
+                'SELECT id_pedido, observaciones, fecha_registro, atendido
+                   FROM cita_pedido WHERE id_cita = ? ORDER BY atendido, fecha_registro DESC', [$id]
+            ),
+
+            // **Cuánto va sumando y cuánto queda por cobrar.**
+            //
+            // La pantalla listaba el precio de cada servicio y no sumaba
+            // ninguno: se agregaba una manicura en el sillón y no había un
+            // solo número que lo reflejara, así que quien atiende no sabía
+            // cuánto cobrar hasta llegar al comprobante.
+            //
+            // **Con seña la cuenta es otra, y ahí es donde se confunde**: lo
+            // que se cobra al final es el total MENOS lo que la clienta ya
+            // dejó, así que agregar un servicio de Gs. 50.000 sobre una cita
+            // señada sube el total y sube lo que falta cobrar en la misma
+            // medida — la seña no cambia, ya está cobrada.
+            'senaCobrada' => (float) DB::scalar('SELECT fn_cita_sena(?)', [$id]),
+        ]);
+    }
+
+    /** Las filas sin repetir por una columna, conservando la primera. */
+    private static function sinRepetir(array $filas, string $col): array
+    {
+        $out = [];
+        foreach ($filas as $f) {
+            $out[(int) $f->$col] ??= $f;
+        }
+
+        return array_values($out);
+    }
+
+    public function atenderGuardar(Request $request): RedirectResponse
+    {
+        $idCita = (int) $request->input('id_cita', 0);
+        $realizados = array_values(array_unique(array_filter(
+            array_map('intval', (array) $request->input('servicios', []))
+        )));
+        $prodIds = (array) $request->input('producto', []);
+        $prodCant = (array) $request->input('cantidad', []);
+        $prodServ = (array) $request->input('servicio_de', []);   // a qué servicio se imputa cada producto
+        $obs = trim((string) $request->input('observaciones', '')) ?: null;
+        $volver = redirect()->route('citas.atender', ['id' => $idCita]);
+
+        $cita = DB::selectOne(
+            'SELECT id_cita, id_usuario, id_estado_cita, fecha_hora, id_sucursal
+               FROM cita WHERE id_cita = ?', [$idCita]);
+        if (! $cita) {
+            flash('Cita no encontrada.', 'error');
+
+            return redirect()->route('citas.agenda');
+        }
+        if ($this->citaAjena($cita)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+
+        // Sin fichaje de entrada no se atiende: la asistencia dejaría de
+        // reflejar quién estuvo de verdad en el salón, y la comisión se le
+        // cargaría igual a quien no trabajó.
+        $fichaje = $this->estadoFichaje($cita);
+        if (! $fichaje['ok']) {
+            if ($fichaje['futura']) {
+                // No falta fichar: falta que llegue el día. Mandarla a fichar
+                // era mandarla a algo que Asistencia rechaza.
+                flash('Esa cita es del ' . fecha($fichaje['dia'], 'd/m/Y')
+                    . ', todavía no llegó ese día: recién se le puede registrar la atención cuando se atienda.', 'error');
+
+                return $volver;
+            }
+
+            $quien = (string) DB::scalar(
+                "SELECT CONCAT(pe.nombre,' ',pe.apellido) FROM usuario u
+                   JOIN persona pe ON pe.id_persona = u.id_persona WHERE u.id_usuario = ?", [(int) $cita->id_usuario]);
+            flash($quien . ' todavía no marcó su entrada del ' . fecha($fichaje['dia'], 'd/m/Y')
+                . ($fichaje['turno']
+                    ? '. Marcá la entrada con el botón de arriba y volvé a guardar.'
+                    : '. Corregí la asistencia de ese día en Seguridad → Asistencia y volvé a intentarlo.'), 'error');
+
+            return $volver;
+        }
+
+        if ((int) $cita->id_estado_cita === 3) {
+            flash('Esa cita está cancelada: no se le puede registrar atención.', 'error');
+
+            return redirect()->route('citas.agenda');
+        }
+        if (DB::scalar('SELECT COUNT(*) FROM factura WHERE id_cita = ? AND id_estado_factura = 1', [$idCita])) {
+            flash('Esa cita ya fue facturada: no se le pueden agregar más servicios ni productos.', 'warning');
+
+            return redirect()->route('citas.agenda');
+        }
+        if (! $realizados) {
+            flash('Marcá al menos un servicio realizado.', 'error');
+
+            return $volver;
+        }
+
+        // Solo servicios activos que existan de verdad
+        $in = implode(',', array_fill(0, count($realizados), '?'));
+        $validos = array_map(fn ($r) => (int) $r->id_servicio,
+            DB::select("SELECT id_servicio FROM servicio WHERE activo = 1 AND id_servicio IN ($in)", $realizados));
+        if (! $validos) {
+            flash('Los servicios elegidos no son válidos.', 'error');
+
+            return $volver;
+        }
+
+        // **Qué parte de la cita puede cerrar quien está guardando.** El
+        // Administrador y el Asistente cierran la de cualquiera; una
+        // profesional, sólo la suya. **Esconder las casillas de las demás no
+        // es el control**: el POST se puede armar a mano, así que el alcance se
+        // vuelve a calcular acá y lo de afuera se descarta.
+        $puedeTodo = $this->veTodaLaAgenda();
+
+        // **De quién se está cerrando la parte.** Una profesional cierra la
+        // suya y no hay nada que preguntar. El Administrador y el Asistente
+        // pueden cerrar **la de cada una por separado** —es lo que se pidió, y
+        // es lo que hace falta cuando alguien se fue sin registrar lo suyo— así
+        // que lo eligen; en «todas» se comporta como siempre.
+        //
+        // **No es cosmético: define qué se BORRA.** Lo agendado y no realizado
+        // sale de la cita para no cobrárselo a la clienta, y sin acotar de
+        // quién, el admin que cerrara la parte de una le borraba de la cita los
+        // servicios que las demás todavía no habían hecho.
+        $cerrarDe = $puedeTodo ? (int) $request->input('cerrar_de', 0) : (int) session('uid');
+
+        $enScope = array_map('intval', array_column(DB::select(
+            'SELECT cs.id_servicio
+               FROM cita_servicio cs
+               JOIN cita c ON c.id_cita = cs.id_cita
+              WHERE cs.id_cita = :c AND cs.terminado_en IS NULL
+                AND (:de = 0 OR COALESCE(cs.id_usuario, c.id_usuario) = :de2)',
+            ['c' => $idCita, 'de' => $cerrarDe, 'de2' => $cerrarDe]
+        ), 'id_servicio'));
+
+        // **De lo tildado sólo se cierra lo que a esta persona le toca.** Un
+        // servicio que YA está en la cita y es de otra profesional —o que ella
+        // ya cerró— se descarta: esconder la casilla no es el control, el POST
+        // se arma a mano.
+        //
+        // **El servicio que NO está en la cita sí pasa**, y es a propósito: es
+        // la manicura que la clienta pide en el sillón, que quien la atiende
+        // agrega sobre la marcha y cierra en el mismo acto.
+        $enCitaHoy = array_map('intval', array_column(DB::select(
+            'SELECT id_servicio FROM cita_servicio WHERE id_cita = ?', [$idCita]), 'id_servicio'));
+
+        $fuera = array_values(array_diff(array_intersect($validos, $enCitaHoy), $enScope));
+        $validos = array_values(array_diff($validos, $fuera));
+
+        if (! $validos) {
+            flash($fuera
+                ? 'Esos servicios no son tuyos o ya están cerrados: no hay nada que registrar de tu parte.'
+                : 'Marcá al menos un servicio realizado.', 'error');
+
+            return $volver;
+        }
+
+        try {
+            // Quién hace cada servicio según la pantalla. Se lee acá y no
+            // adentro: el closure no captura `$request`.
+            $profRealiza = array_map('intval', (array) $request->input('prof_realiza', []));
+
+            $resumen = DB::transaction(function () use ($idCita, $cita, $validos, $prodIds, $prodCant, $prodServ, $obs, $profRealiza, $enScope, $puedeTodo) {
+                $idsSR = [];
+                $srPorServicio = [];
+                $agregados = 0;
+
+                foreach ($validos as $sid) {
+                    // Un servicio agregado durante la atención se suma también a
+                    // la cita, así la factura y el historial quedan coherentes.
+                    //
+                    // Se pregunta ANTES de insertar: `DB::insert()` devuelve si
+                    // la consulta corrió, no si escribió una fila, así que con
+                    // INSERT IGNORE daba `true` aunque el servicio ya estuviera
+                    // en la cita y el aviso terminaba diciendo «se agregaron N
+                    // servicios que no estaban» cada vez.
+                    $yaEnCita = (bool) DB::scalar(
+                        'SELECT COUNT(*) FROM cita_servicio WHERE id_cita = ? AND id_servicio = ?', [$idCita, $sid]
+                    );
+                    if (! $yaEnCita) {
+                        DB::insert(
+                            'INSERT IGNORE INTO cita_servicio (id_cita, id_servicio) VALUES (?,?)', [$idCita, $sid]
+                        );
+                        $agregados++;
+                    }
+
+                    $ya = DB::scalar(
+                        'SELECT id_servicio_realizado FROM servicio_realizado
+                          WHERE id_cita = ? AND id_servicio = ? LIMIT 1', [$idCita, $sid]
+                    );
+                    if ($ya) {
+                        $idsSR[] = (int) $ya;
+                        $srPorServicio[$sid] = (int) $ya;
+
+                        continue;
+                    }
+
+                    // **Quien hizo el servicio es quien tenía el servicio, no
+                    // el de la cita.** El reparto entre profesionales existe
+                    // desde la 5.3.0 y se quedaba en `cita_servicio`: acá se
+                    // escribía siempre `$cita->id_usuario`, así que la manicura
+                    // que hizo Lucía quedaba a nombre de Marta. Y como
+                    // `fn_comision_servicio` sale de `servicio_realizado`, **la
+                    // comisión se le pagaba a quien no trabajó**, y las columnas
+                    // «Generado» y «Comisión» del informe del equipo atribuían
+                    // mal el trabajo.
+                    //
+                    // Sin reparto, `cita_servicio.id_usuario` es NULL y sigue
+                    // valiendo el de la cita, que es el caso de siempre.
+                    $deQuien = DB::scalar(
+                        'SELECT id_usuario FROM cita_servicio
+                          WHERE id_cita = ? AND id_servicio = ? AND id_usuario IS NOT NULL LIMIT 1',
+                        [$idCita, $sid]
+                    );
+
+                    // **Y lo que se eligió en la pantalla le gana**, que es lo
+                    // que faltaba para el servicio agregado en el sillón: la
+                    // manicura que se suma sobre la marcha la puede hacer otra
+                    // persona, y sin esto quedaba a nombre del profesional de
+                    // la cita — la comisión otra vez a quien no trabajó.
+                    $elegido = (int) ($profRealiza[$sid] ?? 0);
+                    if ($elegido > 0 && DB::scalar(
+                        'SELECT COUNT(*) FROM usuario u JOIN rol r ON r.id_rol = u.id_rol
+                          WHERE u.id_usuario = ? AND u.activo = 1 AND r.es_personal = 1', [$elegido])) {
+                        $deQuien = $elegido;
+                    }
+
+                    // **Una atención por cada persona que lo pidió** (7.119.0):
+                    // dos amigas en «Corte» son dos cortes, así que son dos
+                    // filas de `servicio_realizado` — y dos comisiones, que
+                    // `fn_comision_servicio` cuenta por fila. Con una sola, la
+                    // segunda cabeza se trabajaba gratis para quien la hizo.
+                    $copias = max(1, (int) DB::scalar(
+                        'SELECT COUNT(*) FROM cita_servicio WHERE id_cita = ? AND id_servicio = ?', [$idCita, $sid]));
+                    for ($copia = 0; $copia < $copias; $copia++) {
+                        DB::insert(
+                            'INSERT INTO servicio_realizado (id_cita,id_servicio,id_usuario,observaciones) VALUES (?,?,?,?)',
+                            [$idCita, $sid, (int) ($deQuien ?: $cita->id_usuario), $obs]
+                        );
+                        if ($copia === 0) {
+                            $nuevo = (int) DB::getPdo()->lastInsertId();
+                            $idsSR[] = $nuevo;
+                            $srPorServicio[$sid] = $nuevo;
+                        }
+                    }
+                }
+
+                // Los servicios que se agendaron pero NO se hicieron tienen que
+                // salir de la cita: `sp_emitir_factura` arma el detalle desde
+                // `cita_servicio`, así que si queda uno que no se realizó, el
+                // cliente lo termina pagando. Solo se quitan los que no tienen
+                // atención registrada.
+                $enCita = array_map(fn ($r) => (int) $r->id_servicio,
+                    DB::select('SELECT id_servicio FROM cita_servicio WHERE id_cita = ?', [$idCita]));
+                $conAtencion = array_map(fn ($r) => (int) $r->id_servicio,
+                    DB::select('SELECT DISTINCT id_servicio FROM servicio_realizado WHERE id_cita = ?', [$idCita]));
+
+                // **Sólo se quitan los servicios que ESTA persona estaba
+                // cerrando.** Antes se borraba todo lo agendado sin atención, y
+                // con el cierre por partes eso sería catastrófico: la que
+                // termina primero le borraría de la cita los servicios que la
+                // otra todavía no hizo, y la clienta se iría sin la mitad de lo
+                // que pidió. El alcance es el mismo con el que se decide qué se
+                // puede cerrar.
+                $quitados = 0;
+                foreach (array_intersect(array_diff($enCita, $validos, $conAtencion), $enScope) as $sid) {
+                    $quitados += DB::delete('DELETE FROM cita_servicio WHERE id_cita = ? AND id_servicio = ?', [$idCita, $sid]);
+                }
+
+                // **Lo que se cerró queda marcado con la hora.** De ahí sale que
+                // esa profesional deje de estar ocupada: `fn_cita_duracion_de`
+                // ignora lo terminado, y `fn_verificar_disponibilidad` la
+                // descarta sola porque filtra ese bloque con `> 0`.
+                //
+                // `ahora_bd()` y no `NOW()` de PHP: es un momento que después se
+                // le muestra a una persona, y la tzdata de PHP se desactualiza.
+                $cerrados = 0;
+                foreach ($validos as $sid) {
+                    $cerrados += DB::update(
+                        'UPDATE cita_servicio SET terminado_en = ?
+                          WHERE id_cita = ? AND id_servicio = ? AND terminado_en IS NULL',
+                        [ahora_bd(), $idCita, $sid]);
+                }
+
+                // **La cita pasa a Atendida SÓLO cuando no queda ninguna parte
+                // abierta**, que es la condición para poder facturarla (decisión
+                // del usuario: se factura al terminar la cita entera). Mientras
+                // falte alguien, se queda En proceso — sigue ocupando el sillón
+                // y la clienta sigue ahí.
+                $faltan = (int) DB::scalar(
+                    'SELECT COUNT(*) FROM cita_servicio WHERE id_cita = ? AND terminado_en IS NULL', [$idCita]);
+
+                DB::update('UPDATE cita SET id_estado_cita = ? WHERE id_cita = ?',
+                    [$faltan === 0 ? 4 : 5, $idCita]);
+
+                return ['servicios' => count($idsSR), 'agregados' => $agregados,
+                        'quitados' => $quitados, 'cerrados' => $cerrados, 'faltan' => $faltan,
+                        'sr' => $srPorServicio, 'primerSR' => $idsSR[0] ?? 0];
+            });
+
+            // **El consumo va DESPUÉS y por separado, y ése es el arreglo de
+            // IN-02.** Antes iba todo en la misma transacción, así que un
+            // producto sin stock abortaba también los servicios que no tenían
+            // nada que ver: **69 de 204 atenciones (34 %) murieron así**, y la
+            // cita quedaba sin cerrar, sin poder facturarse, para terminar
+            // Atrasada o Ausente. Lo que ya se hizo no se puede perder porque
+            // falte un frasco.
+            //
+            // Cada línea se intenta sola: las que entran descuentan, y las que
+            // no se informan por su nombre para que alguien las cargue después.
+            $consumo = $this->descontarConsumo($idCita, (int) $cita->id_usuario,
+                $prodIds, $prodCant, $prodServ, $resumen['sr'], (int) $resumen['primerSR']);
+
+            Auditoria::registrar('ATENCION', 'Citas', 'servicio_realizado', $idCita,
+                $resumen['servicios'] . ' servicio(s), ' . $consumo['ok'] . ' producto(s) consumido(s)'
+                . ($consumo['fallidos'] ? ' — ' . count($consumo['fallidos']) . ' sin descontar' : ''));
+
+            flash('Atención registrada: ' . $resumen['servicios'] . ' servicio(s).'
+                . ($resumen['agregados'] ? " Se agregaron {$resumen['agregados']} servicio(s) que no estaban en la cita original." : '')
+                . ($resumen['quitados'] ? " Se quitaron {$resumen['quitados']} servicio(s) agendado(s) que no se realizaron: no se van a facturar." : '')
+                . ($consumo['ok'] ? ' El stock de los productos usados fue descontado.' : '')
+                // **Lo que hay que decir es qué pasó con la CITA**, que es otra
+                // cosa que lo que pasó con esta parte: quien cierra lo suyo se
+                // libera la agenda, pero la clienta sigue en el sillón y el
+                // comprobante todavía no se puede emitir.
+                . ($resumen['faltan'] === 0
+                    ? ' La cita quedó cerrada: ya se puede cobrar y facturar.'
+                    : ' Tu parte quedó cerrada, así que tu agenda queda libre desde ahora.'
+                      . ' Falta(n) ' . $resumen['faltan'] . ' servicio(s) de la cita:'
+                      . ' se va a poder facturar cuando estén todos.'));
+
+            // El aviso del consumo va aparte y en amarillo: la atención quedó
+            // registrada —eso es lo importante— pero el inventario no refleja
+            // lo que se usó, y alguien lo tiene que acomodar.
+            if ($consumo['fallidos']) {
+                flash('Lo que sí quedó pendiente es el descuento de stock de '
+                    . implode('; ', $consumo['fallidos'])
+                    . '. La atención está registrada igual'
+                    . (Permisos::puede('inventario.stock')
+                        ? ': ajustá el stock desde Inventario → Stock cuando puedas.'
+                        : ': avisale a quien maneja el inventario para que lo ajuste.'), 'warning');
+            }
+        } catch (QueryException $ex) {
+            // Acá sólo llegan los errores de **los servicios**: desde IN-02 el
+            // consumo de productos se descuenta aparte, línea por línea, y sus
+            // fallas se informan sin tumbar nada (ver `descontarConsumo`).
+            //
+            // OJO CON EL ORDEN: este catch va ANTES que cualquiera de
+            // `RuntimeException`. `QueryException` hereda de `PDOException`,
+            // que hereda de `RuntimeException`, así que al revés el de abajo se
+            // come todos los errores de la base y los muestra con un mensaje
+            // que no tiene nada que ver.
+            //
+            // Lo que no se supo traducir se registra: «No se pudo registrar la
+            // atención» a secas no le dice nada a nadie, y sin esto en el log
+            // no queda rastro de qué pasó. Ya costó una vuelta entera.
+            $amable = Bd::traducir($ex, [
+                'habilitado' => 'El profesional no está habilitado para alguno de esos servicios.',
+            ], '');
+            if ($amable === '') {
+                Log::error('Atención cita ' . $idCita . ': ' . $ex->getMessage());
+                $amable = 'No se pudo registrar la atención. El detalle quedó en el registro del sistema.';
+            }
+            flash($amable, 'error');
+
+            return $volver;
+        } catch (Throwable $ex) {
+            Log::error('Atención cita ' . $idCita . ' (' . get_class($ex) . '): ' . $ex->getMessage()
+                . ' @ ' . $ex->getFile() . ':' . $ex->getLine());
+            flash('No se pudo registrar la atención. El detalle quedó en el registro del sistema.', 'error');
+
+            return $volver;
+        }
+
+        return redirect()->route('citas.agenda', ['dia' => (string) $request->input('dia', date('Y-m-d'))]);
+    }
+
+    /**
+     * Descuenta el consumo de productos de una atención ya registrada.
+     *
+     * **Cada línea va en su propia transacción, a propósito** (IN-02). El
+     * consumo depende del stock, que es de otra persona y de otro momento;
+     * los servicios dependen sólo de lo que se hizo. Atarlos hacía que un
+     * frasco vacío borrara el trabajo de la tarde: 69 de 204 atenciones.
+     *
+     * Devuelve cuántas líneas entraron y la lista de las que no, ya escrita
+     * para mostrarle a la persona («Shampoo x 1 L: no hay stock suficiente»).
+     *
+     * @return array{ok:int, fallidos:list<string>}
+     */
+    private function descontarConsumo(int $idCita, int $idUsuario, array $prodIds,
+        array $prodCant, array $prodServ, array $srPorServicio, int $primerSR): array
+    {
+        // Los productos que se usan de a poco se cargan en su unidad de consumo
+        // (30 ml) y hay que traducirlos a la de stock (0,03 frascos) ANTES de
+        // guardar: `producto_utilizado.cantidad` y el disparador que descuenta
+        // el inventario trabajan siempre en unidades de stock.
+        $ficha = [];
+        foreach (array_unique(array_map('intval', $prodIds)) as $pid) {
+            if ($pid <= 0) {
+                continue;
+            }
+            $fila = DB::selectOne(
+                'SELECT nombre, unidad_medida, contenido, unidad_consumo FROM producto WHERE id_producto = ?', [$pid]
+            );
+            if ($fila) {
+                $ficha[$pid] = (array) $fila;
+            }
+        }
+
+        $ok = 0;
+        $fallidos = [];
+
+        foreach ($prodIds as $i => $pid) {
+            $pid = (int) $pid;
+            $cargado = num($prodCant[$i] ?? 0);
+            if ($pid <= 0 || $cargado <= 0) {
+                continue;
+            }
+            $nombre = $ficha[$pid]['nombre'] ?? ('producto #' . $pid);
+
+            $c = isset($ficha[$pid]) ? consumo_a_stock($ficha[$pid], $cargado) : $cargado;
+            if ($c <= 0) {
+                // 1 ml de un bidón de 5.000 puede redondear a cero: no
+                // descuenta nada y la fila no aporta información.
+                $fallidos[] = $nombre . ' (la cantidad es tan chica que no llega a descontar nada)';
+
+                continue;
+            }
+
+            $servElegido = (int) ($prodServ[$i] ?? 0);
+            if ($servElegido > 0 && ! isset($srPorServicio[$servElegido])) {
+                $fallidos[] = $nombre . ' (estaba marcado en un servicio que no quedó como realizado)';
+
+                continue;
+            }
+            $sr = $servElegido > 0 ? $srPorServicio[$servElegido] : $primerSR;
+            if (! $sr) {
+                $fallidos[] = $nombre . ' (no hay ningún servicio al que cargarlo)';
+
+                continue;
+            }
+
+            try {
+                DB::transaction(function () use ($sr, $pid, $c, $idUsuario) {
+                    // El disparador descuenta el stock solo al INSERT. Si la
+                    // fila ya existía (mismo producto y mismo servicio), un
+                    // UPDATE sumaría la cantidad sin descontar nada, así que el
+                    // movimiento se registra a mano.
+                    $yaPU = DB::selectOne(
+                        'SELECT id_producto_utilizado FROM producto_utilizado
+                          WHERE id_servicio_realizado = ? AND id_producto = ? LIMIT 1', [$sr, $pid]
+                    );
+                    if ($yaPU) {
+                        DB::update('UPDATE producto_utilizado SET cantidad = cantidad + ? WHERE id_producto_utilizado = ?',
+                            [$c, (int) $yaPU->id_producto_utilizado]);
+                        // Precio en NULL, igual que el movimiento que genera el
+                        // disparador: así las dos filas se ven iguales en el libro.
+                        Bd::procedimiento('sp_registrar_movimiento_inventario', [
+                            $pid, Sucursales::activa() ?: 1, $idUsuario, 2, $c, null,
+                            'SR#' . $sr, 'Consumo adicional durante el servicio',
+                        ]);
+                    } else {
+                        DB::insert('INSERT INTO producto_utilizado (id_servicio_realizado,id_producto,cantidad) VALUES (?,?,?)',
+                            [$sr, $pid, $c]);
+                    }
+                });
+                $ok++;
+            } catch (QueryException $ex) {
+                // **«No habilitado en esa sucursal» no es lo mismo que «sin
+                // stock», y decirlo así mandaba a comprar lo que ya hay.** El
+                // candado se mudó a `producto_sucursal` en la 7.33.0: el
+                // producto existe y puede estar lleno en otro local, lo que
+                // falta es traerlo a éste. Sin nombrar ese camino, quien
+                // atiende no tiene forma de saber qué hacer.
+                $fallidos[] = $nombre . ': ' . Bd::traducir($ex, [
+                    'habilitado en esa sucursal' => 'no se maneja en esta sucursal — traelo desde '
+                        . 'Inventario → Productos, con el filtro «Sólo en otras sucursales» y el botón «Traer acá»',
+                    'stock' => 'no hay stock suficiente',
+                ], 'no se pudo descontar (el detalle quedó registrado)');
+
+                if (! str_contains($ex->getMessage(), 'stock')
+                    && ! str_contains($ex->getMessage(), 'habilitado en esa sucursal')) {
+                    Log::error('Consumo de la cita ' . $idCita . ', producto ' . $pid . ': ' . $ex->getMessage());
+                }
+            } catch (Throwable $ex) {
+                $fallidos[] = $nombre . ': no se pudo descontar (el detalle quedó registrado)';
+                Log::error('Consumo de la cita ' . $idCita . ', producto ' . $pid . ': ' . $ex->getMessage());
+            }
+        }
+
+        return ['ok' => $ok, 'fallidos' => $fallidos];
+    }
+
+    /**
+     * La clienta pidió algo desde el portal y el profesional ya lo resolvió
+     * (lo agregó, o le explicó que no se puede).
+     */
+    public function pedidoVisto(Request $request): RedirectResponse
+    {
+        $id = (int) $request->input('id_pedido', 0);
+        $p = DB::selectOne(
+            'SELECT cp.id_pedido, cp.id_cita, c.id_usuario
+               FROM cita_pedido cp JOIN cita c ON c.id_cita = cp.id_cita
+              WHERE cp.id_pedido = ?', [$id]
+        );
+        if (! $p) {
+            flash('Ese pedido no existe.', 'error');
+
+            return redirect()->route('citas.agenda');
+        }
+        if ($this->citaAjena($p)) {
+            abort(403, 'Esa cita es de otro profesional.');
+        }
+
+        DB::update('UPDATE cita_pedido SET atendido = 1 WHERE id_pedido = ?', [$id]);
+        flash('Pedido marcado como resuelto.');
+
+        return redirect()->route('citas.atender', ['id' => (int) $p->id_cita]);
+    }
+
+    // -----------------------------------------------------------------
+
+    /** ¿El profesional fichó su entrada ese día? */
+    /**
+     * ¿Se puede registrar la atención de esta cita, y si no, por qué?
+     *
+     * Son DOS cosas distintas y antes se contestaban con el mismo mensaje:
+     *
+     *  · La cita es de un día que todavía no llegó. Ahí no falta fichar —
+     *    faltan días—. Decir «fichá la entrada» mandaba a Seguridad →
+     *    Asistencia, que contesta «no se puede registrar asistencia de un día
+     *    que todavía no llegó»: la persona daba vueltas sin salida. Con el mes
+     *    simulado pasaba en 83 de las 172 citas.
+     *  · La cita es de hoy y falta el fichaje de verdad. Eso sí se resuelve, y
+     *    desde esta misma pantalla.
+     *
+     * Devuelve `turno` cuando el fichaje se puede hacer acá, para dibujar el
+     * botón; si viene null, hay que ir a Asistencia (por ejemplo, una cita de
+     * ayer, que ya no es fichar sino corregir la planilla).
+     */
+    private function estadoFichaje(object $cita): array
+    {
+        $dia = substr((string) $cita->fecha_hora, 0, 10);
+        $hoy = ahora_bd('Y-m-d');
+        $idU = (int) $cita->id_usuario;
+
+        if (! $this->usaTurnos($idU) || $this->ficho($idU, $dia)) {
+            return ['ok' => true];
+        }
+
+        if ($dia > $hoy) {
+            return ['ok' => false, 'futura' => true, 'dia' => $dia, 'turno' => null];
+        }
+
+        // Sólo se ficha el día en curso. Un día pasado se corrige desde
+        // Asistencia, que es lo que ya hace `asistenciaMarcar`.
+        //
+        // **El turno que se ofrece es el de la HORA de la cita** (7.122.0).
+        // Tomaba el primero del día, así que a quien trabaja mañana y tarde
+        // la cita de las 15 le ofrecía «Marcar entrada (08:00 a 12:00)» —un
+        // turno ya pasado, que el servidor rechaza fuera de franja— y la
+        // entrada de la tarde no había forma de marcarla desde acá. Sin un
+        // turno que cubra esa hora, el más cercano que todavía no terminó, y
+        // si no el primero.
+        $horaCita = substr((string) $cita->fecha_hora, 11, 8) ?: '00:00:00';
+        $turno = $dia === $hoy
+            ? DB::selectOne(
+                'SELECT t.id_turno, t.nombre, t.hora_inicio, t.hora_fin
+                   FROM usuario_turno ut
+                   JOIN turno_laboral t ON t.id_turno = ut.id_turno AND t.activo = 1
+                   JOIN turno_dia td    ON td.id_turno = t.id_turno AND td.dia_semana = ?
+                  WHERE ut.id_usuario = ?
+                  ORDER BY (? BETWEEN t.hora_inicio AND t.hora_fin) DESC,
+                           (t.hora_fin >= ?) DESC, t.hora_inicio
+                  LIMIT 1',
+                [(int) date('N', strtotime($dia)), $idU, $horaCita, $horaCita]
+            )
+            : null;
+
+        return ['ok' => false, 'futura' => false, 'dia' => $dia, 'turno' => $turno];
+    }
+
+    /**
+     * ¿A este profesional ya se lo dio por ausente ese día?
+     *
+     * Es una fila de `asistencia` sin entrada y con `justificada` puesta —0 sin
+     * aviso, 1 con permiso—: alguien decidió que no vino. La distinción importa
+     * en la agenda, porque cambia qué hay que hacer con la cita.
+     */
+    private function marcadoAusente(object $cita): bool
+    {
+        return (bool) DB::scalar(
+            'SELECT COUNT(*) FROM asistencia
+              WHERE id_usuario = ? AND fecha = ?
+                AND hora_entrada IS NULL AND justificada IS NOT NULL',
+            [(int) $cita->id_usuario, substr((string) $cita->fecha_hora, 0, 10)]
+        );
+    }
+
+    private function ficho(int $idUsuario, string $fecha): bool
+    {
+        return (bool) DB::scalar(
+            'SELECT COUNT(*) FROM asistencia
+              WHERE id_usuario = ? AND fecha = ? AND hora_entrada IS NOT NULL', [$idUsuario, $fecha]
+        );
+    }
+
+    /**
+     * ¿Tiene turno asignado? Si no tiene ninguno, el salón todavía no usa la
+     * agenda de turnos y no se le puede exigir fichaje (mismo criterio
+     * permisivo que fn_verificar_disponibilidad).
+     */
+    private function usaTurnos(int $idUsuario): bool
+    {
+        return (bool) DB::scalar(
+            'SELECT COUNT(*) FROM usuario_turno ut
+               JOIN turno_laboral t ON t.id_turno = ut.id_turno AND t.activo = 1
+              WHERE ut.id_usuario = ?', [$idUsuario]
+        );
+    }
+
+    /**
+     * ¿Este rol ve la agenda de todo el salón, o solo la propia?
+     *
+     * El Profesional atiende: le sirve su columna, no la de sus compañeras.
+     * Quien coordina el salón necesita verlo todo, y eso se detecta por el
+     * permiso de turnos —quien organiza los turnos organiza la agenda—, no por
+     * una lista fija de id de rol.
+     */
+    /** La regla vive en Permisos: la comparten la agenda y el panel. */
+    /**
+     * ¿Esta cita es de otro local?
+     *
+     * **La atención se registra donde ocurrió.** La pantalla se abría con
+     * cualquier id: desde una sucursal se podía cargar el consumo y los
+     * servicios de una cita de otra, y con eso el stock salía del depósito
+     * equivocado. El resto de la agenda ya filtraba por sucursal; esta
+     * pantalla se llega por `?id=` y se quedó afuera.
+     */
+    private function deOtroLocal(object $cita): bool
+    {
+        $suc = Sucursales::activa();
+
+        return $suc > 0 && (int) ($cita->id_sucursal ?? 0) > 0 && (int) $cita->id_sucursal !== $suc;
+    }
+
+    private function veTodaLaAgenda(): bool
+    {
+        return Permisos::veTodaLaAgenda();
+    }
+
+    /**
+     * Limitar la agenda a las citas propias no alcanza si después se puede
+     * entrar a la de otro escribiendo el id en la URL.
+     *
+     * **«Propia» es donde trabajo, no sólo la que está a mi nombre.** Preguntaba
+     * únicamente por `cita.id_usuario`, o sea por el dueño, y desde la 5.3.0 una
+     * cita se reparte: la clienta pide mechas con Lucía y manicura con Rocío, la
+     * cita queda a nombre de una y a la otra **le contestaba 403** al abrir la
+     * atención de una clienta que estaba atendiendo ella.
+     *
+     * Es el mismo criterio con el que la agenda decide qué mostrar, escrito acá
+     * también porque acá es donde de verdad se hace cumplir: la agenda esconde,
+     * esto niega.
+     */
+    private function citaAjena(?object $cita): bool
+    {
+        if (! $cita || $this->veTodaLaAgenda()) {
+            return false;
+        }
+
+        $yo = (int) session('uid');
+        if ((int) $cita->id_usuario === $yo) {
+            return false;
+        }
+
+        // Un `cita_servicio.id_usuario` en NULL es el dueño de la cita, que es
+        // el caso que ya resolvió la comparación de arriba.
+        return ! DB::scalar(
+            'SELECT COUNT(*) FROM cita_servicio WHERE id_cita = ? AND id_usuario = ?',
+            [(int) $cita->id_cita, $yo]);
+    }
+
+    private function esPersonalActivo(int $idUsuario): bool
+    {
+        return (bool) DB::scalar(
+            'SELECT COUNT(*) FROM usuario u JOIN rol r ON r.id_rol = u.id_rol
+              WHERE u.id_usuario = ? AND u.activo = 1 AND r.es_personal = 1', [$idUsuario]
+        );
+    }
+}
